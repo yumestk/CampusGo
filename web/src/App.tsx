@@ -34,7 +34,7 @@ export default function App() {
   };
   const oidc = () => {
     if (!config?.oidcEnabled || loginLock.current) return;
-    const popup = window.open('/api/auth/oidc/start', 'campusgo-identity', 'width=560,height=760');
+    const popup = window.open(`${config.oidcCallbackOrigin}/api/auth/oidc/start`, 'campusgo-identity', 'width=560,height=760');
     if (!popup) { setError('请允许打开登录窗口后重试'); return; }
     loginLock.current = true; setBusy(true); setError('');
     const detach = () => { clearInterval(poll); clearTimeout(timeout); window.removeEventListener('message', receive); popupCleanup.current = () => {}; };
