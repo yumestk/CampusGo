@@ -14,3 +14,4 @@
 *.tsbuildinfo
 /web/test-results/
 /web/playwright-report/
+__pycache__/

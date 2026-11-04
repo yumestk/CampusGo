@@ -1,4 +1,4 @@
-.PHONY: build check test run-api run-worker env infra-up infra-down verify-d0 migrate seed
+.PHONY: build check test run-api run-worker env infra-up infra-down verify-d0 verify-d1 migrate seed
 
 build:
 	go build -o bin/ ./cmd/...
@@ -35,3 +35,6 @@ migrate: env build
 
 seed: env build
 	./scripts/with-local-env.sh ./bin/seed
+
+verify-d1: env build
+	./scripts/with-local-env.sh ./verification/d1.sh

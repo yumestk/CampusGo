@@ -1,0 +1,15 @@
+.task-detail-page { display: grid; gap: 16px; }
+.task-overview > h1 { margin: 16px 0 8px; font-size: 24px; line-height: 1.6; overflow-wrap: anywhere; }
+.task-facts { margin-top: 20px; }
+.task-facts dd, .reward { overflow-wrap: anywhere; }
+.card-bottom { flex-wrap: wrap; }
+.card-reward { min-width: 0; flex-shrink: 1; }
+.reward-label { flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 600px) {
+  .app .square-page > .page-head { display: flex; }
+  .app .square-page .task-market > .section-title { display: flex; flex-wrap: wrap; gap: 10px; }
+  .app .square-page .section-title .search-field { width: 100%; }
+  .app .square-page .hero-copy > h2 { display: block; margin: 0; font-size: 23px; }
+  .app .mobile-bottom-nav { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .app .square-page .card-reward .reward { font-size: clamp(12px,4vw,18px); white-space: nowrap; }
+}
