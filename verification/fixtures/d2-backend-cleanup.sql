@@ -1,4 +1,8 @@
 -- Only for campusgo_verification after an interrupted D2 backend test.
+SET @d2_drop_check=(SELECT IF(COUNT(*)=1,'ALTER TABLE wallet_ledger DROP CHECK ck_d2_injected','SELECT 1') FROM information_schema.TABLE_CONSTRAINTS WHERE CONSTRAINT_SCHEMA=DATABASE() AND TABLE_NAME='wallet_ledger' AND CONSTRAINT_NAME='ck_d2_injected');
+PREPARE d2_cleanup_check FROM @d2_drop_check;
+EXECUTE d2_cleanup_check;
+DEALLOCATE PREPARE d2_cleanup_check;
 START TRANSACTION;
 DELETE r FROM publish_request r JOIN app_user u ON u.id=r.publisher_id WHERE u.display_name='D2资金验证';
 DELETE e FROM escrow_order e JOIN app_user u ON u.id=e.publisher_id WHERE u.display_name='D2资金验证';

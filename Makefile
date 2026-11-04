@@ -1,4 +1,4 @@
-.PHONY: build check test run-api run-worker env infra-up infra-down verify-d0 verify-d1 migrate seed
+.PHONY: build check test run-api run-worker env infra-up infra-down verify-d0 verify-d1 verify-d2 migrate seed reconcile
 
 build:
 	go build -o bin/ ./cmd/...
@@ -38,3 +38,9 @@ seed: env build
 
 verify-d1: env build
 	./scripts/with-local-env.sh ./verification/d1.sh
+
+verify-d2: env build
+	./scripts/with-local-env.sh ./verification/d2.sh
+
+reconcile: env build
+	./scripts/with-local-env.sh ./bin/reconcile

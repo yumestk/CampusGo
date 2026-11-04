@@ -10,6 +10,6 @@
   .app .square-page .task-market > .section-title { display: flex; flex-wrap: wrap; gap: 10px; }
   .app .square-page .section-title .search-field { width: 100%; }
   .app .square-page .hero-copy > h2 { display: block; margin: 0; font-size: 23px; }
-  .app .mobile-bottom-nav { grid-template-columns: repeat(2,minmax(0,1fr)); }
+  .app .mobile-bottom-nav { grid-template-columns: repeat(4,minmax(0,1fr)); }
   .app .square-page .card-reward .reward { font-size: clamp(12px,4vw,18px); white-space: nowrap; }
 }

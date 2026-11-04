@@ -284,6 +284,64 @@ func TestIntegrationPublishFunds(t *testing.T) {
 		}
 		check()
 	})
+	t.Run("SQL_failure_between_posting_legs_rolls_back", func(t *testing.T) {
+		u := newUser(1000)
+		key := uuid.NewString()
+		// A verification-only constraint fails the CREDIT insert after the debit, first
+		// ledger leg and escrow-account update have really executed inside the transaction.
+		query := fmt.Sprintf("ALTER TABLE wallet_ledger ADD CONSTRAINT ck_d2_injected CHECK (NOT (user_id=%d AND direction='CREDIT' AND ref_type='ESCROW'))", u.ID)
+		if _, e := db.Exec(query); e != nil {
+			t.Fatal(e)
+		}
+		defer func() {
+			if _, e := db.Exec("ALTER TABLE wallet_ledger DROP CHECK ck_d2_injected"); e != nil {
+				t.Error(e)
+			}
+		}()
+		_, e := p.Publish(ctx, u, key, command(123))
+		requireCode(t, e, "INTERNAL_ERROR")
+		if balance(u).AvailableCents != 1000 {
+			t.Fatal("debit survived failure of the credit leg")
+		}
+		r, e := p.Result(ctx, u, key)
+		if e != nil || r.State != "NOT_OBSERVED" {
+			t.Fatalf("r=%+v err=%v", r, e)
+		}
+		var n int
+		if e = db.QueryRow("SELECT COUNT(*) FROM wallet_ledger WHERE user_id=? AND ref_type='ESCROW'", u.ID).Scan(&n); e != nil || n != 0 {
+			t.Fatalf("partial ledger count=%d err=%v", n, e)
+		}
+		check()
+	})
+	t.Run("missing_wallet_and_stale_identity_do_not_create_funds", func(t *testing.T) {
+		u := newUser(0)
+		if _, e := db.Exec("DELETE FROM wallet_account WHERE owner_id=? AND owner_type='USER'", u.ID); e != nil {
+			t.Fatal(e)
+		}
+		key := uuid.NewString()
+		_, e := p.Publish(ctx, u, key, command(1))
+		requireCode(t, e, "ACCOUNT_NOT_FOUND")
+		r, e := p.Result(ctx, u, key)
+		if e != nil || r.State != "REJECTED" || r.ErrorCode != "ACCOUNT_NOT_FOUND" {
+			t.Fatalf("r=%+v err=%v", r, e)
+		}
+		u = newUser(100)
+		for _, change := range []string{"active=0", "campus_id=2"} {
+			if _, e = db.Exec("UPDATE app_user SET "+change+" WHERE id=?", u.ID); e != nil {
+				t.Fatal(e)
+			}
+			key = uuid.NewString()
+			_, e = p.Publish(ctx, u, key, command(1))
+			requireCode(t, e, "FORBIDDEN")
+			if _, e = db.Exec("UPDATE app_user SET active=1,campus_id=1 WHERE id=?", u.ID); e != nil {
+				t.Fatal(e)
+			}
+			if balance(u).AvailableCents != 100 {
+				t.Fatal("stale identity changed funds")
+			}
+		}
+		check()
+	})
 	t.Run("rollback_after_all_writes_and_retry", func(t *testing.T) {
 		u := newUser(1000)
 		key := uuid.NewString()

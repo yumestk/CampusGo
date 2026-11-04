@@ -40,5 +40,5 @@ for attempt in $(seq 1 30); do
 done
 test "$ready" = true
 python3 verification/d1-faults.py
-(cd web && npm ci && npm test && npm run build && npx playwright install chromium && npm run test:e2e)
+(cd web && npm ci && npm test && npm run build && npx playwright install chromium && npm run test:e2e -- d1.spec.ts)
 printf '%s\n' 'D1 identity, dependency recovery, query and browser checks passed.'
