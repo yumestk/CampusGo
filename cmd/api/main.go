@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/config"
 	"github.com/yumestk/CampusGo/internal/platform/database"
+	"github.com/yumestk/CampusGo/internal/platform/idgen"
 	"github.com/yumestk/CampusGo/internal/platform/rediscache"
 	"github.com/yumestk/CampusGo/internal/platform/server"
 	"github.com/yumestk/CampusGo/internal/platform/telemetry"
@@ -59,7 +61,15 @@ func run(logger *slog.Logger) error {
 	}
 	defer cache.Close()
 	gin.SetMode(gin.ReleaseMode)
+	worker, err := strconv.ParseInt(os.Getenv("CAMPUSGO_ID_WORKER"), 10, 64)
+	if err != nil {
+		return fmt.Errorf("CAMPUSGO_ID_WORKER must be explicitly set to a unique ID in [0,1023]")
+	}
+	ids, err := idgen.New(worker)
+	if err != nil {
+		return err
+	}
 	router := httpapi.NewRouter(logger, telemetry.NewRegistry("api"))
-	httpapi.RegisterBusiness(router, &auth.Service{DB: db, Redis: cache, Config: identityConfig}, errand.Query{DB: db})
+	httpapi.RegisterBusiness(router, &auth.Service{DB: db, Redis: cache, Config: identityConfig}, errand.Query{DB: db}, &errand.Publisher{DB: db, IDs: ids})
 	return server.Run(ctx, cfg, router, logger)
 }

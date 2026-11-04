@@ -10,6 +10,7 @@ import (
 
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/database"
+	"github.com/yumestk/CampusGo/internal/wallet"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -65,10 +66,17 @@ func run() error {
 		if bound != u.id {
 			return fmt.Errorf("existing identity binding conflicts with local seed")
 		}
+		opening := int64(0)
+		if u.id == 1001 {
+			opening = 100000
+		}
+		if err := wallet.SeedOpening(ctx, tx, u.id, opening); err != nil {
+			return err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("seed commit result unknown: %w", err)
 	}
-	fmt.Println("local users and explicit OIDC bindings seeded; no tasks or money created")
+	fmt.Println("local users, OIDC bindings and opening wallets seeded; existing balances preserved")
 	return nil
 }

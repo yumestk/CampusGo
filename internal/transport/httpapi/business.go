@@ -34,6 +34,9 @@ func fail(c *gin.Context, err error) {
 		f = &fault.Error{Code: "INTERNAL_ERROR", Status: 500, Cause: err}
 	}
 	messages := map[string]string{"UNAUTHORIZED": "未登录或会话已过期", "FORBIDDEN": "没有访问权限", "IDENTITY_NOT_BOUND": "身份尚未绑定校园用户", "INVALID_REQUEST": "请求参数不合法", "DEPENDENCY_UNAVAILABLE": "依赖暂不可用，请稍后重试", "ERRAND_NOT_FOUND": "任务不存在", "INTERNAL_ERROR": "系统内部错误", "NOT_FOUND": "接口不存在", "METHOD_NOT_ALLOWED": "请求方法不支持", "OIDC_DISABLED": "未启用统一身份登录"}
+	for code, message := range map[string]string{"ACCOUNT_NOT_FOUND": "钱包账户不存在", "ESCROW_NOT_FOUND": "托管记录不存在或无权查看", "INSUFFICIENT_BALANCE": "可用余额不足", "BALANCE_LIMIT": "账户金额或记账序号已达上限", "IDEMPOTENCY_CONFLICT": "请求号已用于不同的发布内容", "PUBLISH_RESULT_UNKNOWN": "发布结果暂未确认，请查询结果或使用原请求号重试"} {
+		messages[code] = message
+	}
 	var data any
 	if f.Status == 503 {
 		c.Header("Retry-After", "1")
@@ -67,7 +70,7 @@ func bearer(c *gin.Context) string {
 	}
 	return parts[1]
 }
-func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query) {
+func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, p *errand.Publisher) {
 	api := router.Group("/api")
 	api.Use(func(c *gin.Context) {
 		duration := 3 * time.Second
@@ -152,6 +155,7 @@ func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query) {
 		c.Next()
 	})
 	protected.GET("/users/me", func(c *gin.Context) { ok(c, c.MustGet("user")) })
+	registerFunds(protected, p, q.DB)
 	list := func(c *gin.Context, mine bool) {
 		u := c.MustGet("user").(auth.User)
 		o := errand.ListOptions{CampusID: u.CampusID, Status: c.DefaultQuery("status", "PUBLISHED"), Size: 20}
