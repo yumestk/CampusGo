@@ -9,3 +9,8 @@
 !/.env.*.example
 *.log
 /coverage.out
+/web/node_modules/
+/web/dist/
+*.tsbuildinfo
+/web/test-results/
+/web/playwright-report/

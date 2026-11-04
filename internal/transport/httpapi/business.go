@@ -1,0 +1,239 @@
+package httpapi
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/yumestk/CampusGo/internal/auth"
+	"github.com/yumestk/CampusGo/internal/errand"
+	"github.com/yumestk/CampusGo/internal/platform/fault"
+	"github.com/yumestk/CampusGo/internal/transport/wire"
+)
+
+type result struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data"`
+}
+
+func ok(c *gin.Context, data any) { c.JSON(200, result{"OK", "成功", data}) }
+func fail(c *gin.Context, err error) {
+	var f *fault.Error
+	if !errors.As(err, &f) {
+		f = &fault.Error{Code: "INTERNAL_ERROR", Status: 500, Cause: err}
+	}
+	messages := map[string]string{"UNAUTHORIZED": "未登录或会话已过期", "FORBIDDEN": "没有访问权限", "IDENTITY_NOT_BOUND": "身份尚未绑定校园用户", "INVALID_REQUEST": "请求参数不合法", "DEPENDENCY_UNAVAILABLE": "依赖暂不可用，请稍后重试", "ERRAND_NOT_FOUND": "任务不存在", "INTERNAL_ERROR": "系统内部错误", "NOT_FOUND": "接口不存在", "METHOD_NOT_ALLOWED": "请求方法不支持", "OIDC_DISABLED": "未启用统一身份登录"}
+	var data any
+	if f.Status == 503 {
+		c.Header("Retry-After", "1")
+		data = gin.H{"retryAfterMillis": "1000"}
+	}
+	if f.Status >= 500 {
+		slog.ErrorContext(c.Request.Context(), "request failed", "request_id", c.GetString("request_id"), "code", f.Code, "cause_type", fmt.Sprintf("%T", f.Cause))
+	}
+	c.AbortWithStatusJSON(f.Status, result{f.Code, messages[f.Code], data})
+}
+func decode(c *gin.Context, out any) error {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 16<<10)
+	d := json.NewDecoder(c.Request.Body)
+	d.DisallowUnknownFields()
+	if err := d.Decode(out); err != nil {
+		return fault.New("INVALID_REQUEST", 400)
+	}
+	if err := d.Decode(new(any)); err != io.EOF {
+		return fault.New("INVALID_REQUEST", 400)
+	}
+	return nil
+}
+func bearer(c *gin.Context) string {
+	values := c.Request.Header.Values("Authorization")
+	if len(values) != 1 {
+		return ""
+	}
+	parts := strings.Fields(values[0])
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return ""
+	}
+	return parts[1]
+}
+func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query) {
+	api := router.Group("/api")
+	api.Use(func(c *gin.Context) {
+		duration := 3 * time.Second
+		if strings.HasPrefix(c.FullPath(), "/api/auth/oidc/") {
+			duration = 15 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(c.Request.Context(), duration)
+		defer cancel()
+		c.Request = c.Request.WithContext(ctx)
+		c.Header("Cache-Control", "no-store")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Next()
+	})
+	api.GET("/auth/config", func(c *gin.Context) {
+		callback, _ := url.Parse(s.Config.CallbackURL)
+		origin := ""
+		if callback != nil && callback.Host != "" {
+			origin = callback.Scheme + "://" + callback.Host
+		}
+		ok(c, gin.H{"demoLoginEnabled": s.Config.Demo, "oidcEnabled": s.Config.Issuer != "", "oidcCallbackOrigin": origin})
+	})
+	api.POST("/auth/login", func(c *gin.Context) {
+		var body struct {
+			UserID wire.Integer `json:"userId"`
+		}
+		if err := decode(c, &body); err != nil {
+			fail(c, err)
+			return
+		}
+		session, err := s.DemoLogin(c.Request.Context(), int64(body.UserID))
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		ok(c, session)
+	})
+	api.POST("/auth/logout", func(c *gin.Context) {
+		if err := s.Logout(c.Request.Context(), bearer(c)); err != nil {
+			fail(c, err)
+			return
+		}
+		ok(c, nil)
+	})
+	api.GET("/auth/oidc/start", func(c *gin.Context) {
+		location, state, err := s.OIDCStart(c.Request.Context())
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		http.SetCookie(c.Writer, &http.Cookie{Name: "campusgo_oidc_state", Value: state, Path: "/api/auth/oidc", MaxAge: 300, HttpOnly: true, Secure: strings.HasPrefix(s.Config.CallbackURL, "https://"), SameSite: http.SameSiteLaxMode})
+		c.Redirect(302, location)
+	})
+	api.GET("/auth/oidc/callback", func(c *gin.Context) {
+		cookie, _ := c.Cookie("campusgo_oidc_state")
+		http.SetCookie(c.Writer, &http.Cookie{Name: "campusgo_oidc_state", Value: "", Path: "/api/auth/oidc", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.Config.CallbackURL, "https://"), SameSite: http.SameSiteLaxMode})
+		session, err := s.OIDCCallback(c.Request.Context(), c.Query("state"), cookie, c.Query("code"))
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		if strings.Contains(c.GetHeader("Accept"), "application/json") {
+			ok(c, session)
+			return
+		}
+		// Credentials never enter a URL or browser history. The opener and target origin are fixed.
+		data, _ := json.Marshal(result{"OK", "成功", session})
+		origin, _ := json.Marshal(s.Config.FrontendOrigin)
+		nonce := rand.Text()
+		c.Header("Content-Security-Policy", "default-src 'none'; script-src 'nonce-"+nonce+"'; frame-ancestors 'none'; base-uri 'none'")
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Data(200, "text/html; charset=utf-8", []byte("<!doctype html><html lang=\"zh-CN\"><meta charset=\"utf-8\"><title>登录完成</title><p>登录完成，可以关闭此窗口。</p><script nonce=\""+nonce+"\">if(window.opener){window.opener.postMessage("+string(data)+","+string(origin)+");window.close()}</script></html>"))
+	})
+	protected := api.Group("")
+	protected.Use(func(c *gin.Context) {
+		u, err := s.Resolve(c.Request.Context(), bearer(c))
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		c.Set("user", u)
+		c.Next()
+	})
+	protected.GET("/users/me", func(c *gin.Context) { ok(c, c.MustGet("user")) })
+	list := func(c *gin.Context, mine bool) {
+		u := c.MustGet("user").(auth.User)
+		o := errand.ListOptions{CampusID: u.CampusID, Status: c.DefaultQuery("status", "PUBLISHED"), Size: 20}
+		var err error
+		if v, exists := c.GetQuery("campusId"); exists {
+			o.CampusID, err = strconv.ParseInt(v, 10, 64)
+			if err != nil {
+				fail(c, fault.New("INVALID_REQUEST", 400))
+				return
+			}
+		}
+		for name, dest := range map[string]*int{"size": &o.Size, "page": &o.Page} {
+			if v, exists := c.GetQuery(name); exists {
+				*dest, err = strconv.Atoi(v)
+				if err != nil {
+					fail(c, fault.New("INVALID_REQUEST", 400))
+					return
+				}
+			}
+		}
+		cursor, present := c.GetQuery("cursor")
+		_, cursorPresent := c.Request.URL.Query()["cursor"]
+		present = present || cursorPresent
+		if cursor != "" {
+			o.BeforeTime, o.Before, err = errand.ParseCursor(cursor)
+			if err != nil {
+				fail(c, fault.New("INVALID_REQUEST", 400))
+				return
+			}
+		}
+		if mine {
+			o.Role = c.DefaultQuery("role", "PUBLISHED_BY_ME")
+		}
+		if present && o.Page != 0 {
+			fail(c, fault.New("INVALID_REQUEST", 400))
+			return
+		}
+		page, err := q.List(c.Request.Context(), u, o)
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		if present {
+			ok(c, page)
+		} else {
+			c.Header("X-Next-Cursor", page.NextCursor)
+			ok(c, page.Items)
+		}
+	}
+	protected.GET("/errands", func(c *gin.Context) { list(c, false) })
+	protected.GET("/errands/mine", func(c *gin.Context) { list(c, true) })
+	protected.GET("/errands/:id", func(c *gin.Context) {
+		id, err := positiveID(c.Param("id"))
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		card, err := q.Detail(c.Request.Context(), c.MustGet("user").(auth.User), id)
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		ok(c, card)
+	})
+	protected.GET("/errands/:id/timeline", func(c *gin.Context) {
+		id, err := positiveID(c.Param("id"))
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		items, err := q.Timeline(c.Request.Context(), c.MustGet("user").(auth.User), id)
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		ok(c, items)
+	})
+}
+func positiveID(value string) (int64, error) {
+	id, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || id <= 0 {
+		return 0, fault.New("INVALID_REQUEST", 400)
+	}
+	return id, nil
+}

@@ -4,13 +4,18 @@ go 1.27.0
 
 require (
 	github.com/apache/rocketmq-clients/golang/v5 v5.1.4
+	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/gin-gonic/gin v1.12.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/google/uuid v1.6.0
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/redis/go-redis/v9 v9.23.0
+	golang.org/x/crypto v0.58.0
 	golang.org/x/net v0.61.0
+	golang.org/x/oauth2 v0.37.0
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
@@ -62,7 +67,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/arch v0.22.0 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/text v0.43.0 // indirect
@@ -70,5 +74,4 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20261005182115-fad411399dd8 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261005182115-fad411399dd8 // indirect
 	google.golang.org/grpc v1.84.0 // indirect
-	google.golang.org/protobuf v1.36.12 // indirect
 )

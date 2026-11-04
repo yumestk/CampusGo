@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/pressly/goose/v3"
@@ -21,6 +22,7 @@ func main() {
 func run() error {
 	dir := flag.String("dir", "migrations", "SQL migration directory")
 	name := flag.String("database", "campusgo", "target database")
+	table := flag.String("table", "campusgo_schema_version", "migration history table")
 	flag.Parse()
 	if flag.NArg() != 1 || (flag.Arg(0) != "up" && flag.Arg(0) != "status") {
 		return fmt.Errorf("usage: migrate [-dir path] [-database name] up|status")
@@ -32,6 +34,10 @@ func run() error {
 		return err
 	}
 	defer db.Close()
+	if !regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`).MatchString(*table) {
+		return fmt.Errorf("invalid migration table")
+	}
+	goose.SetTableName(*table)
 	if err := goose.SetDialect("mysql"); err != nil {
 		return err
 	}

@@ -13,7 +13,7 @@ import (
 )
 
 func TestPanicIsContainedAndRequestIDIsPreserved(t *testing.T) {
-	router := NewRouter(slog.New(slog.NewJSONHandler(io.Discard, nil)), telemetry.NewRegistry("api")).(*gin.Engine)
+	router := NewRouter(slog.New(slog.NewJSONHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
 	router.GET("/panic", func(c *gin.Context) { panic("probe") })
 	id := uuid.NewString()
 	request := httptest.NewRequest(http.MethodGet, "/panic", nil)

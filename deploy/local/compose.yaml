@@ -113,6 +113,17 @@ services:
       JAVA_OPT_EXT: -Xms64m -Xmx128m
     mem_limit: 256m
 
+  dex:
+    image: dexidp/dex:v2.46.1@sha256:65b72ca0f4b0bf6d4ada84ec21da8851782563404ac7b8f926923d27ceced9ab
+    profiles: [identity]
+    ports: ["127.0.0.1:15556:5556"]
+    command: [dex, serve, /etc/dex/config.yaml]
+    environment:
+      CAMPUSGO_OIDC_CLIENT_SECRET: ${CAMPUSGO_OIDC_CLIENT_SECRET:?Run make env}
+      CAMPUSGO_LOCAL_IDP_HASH: ${CAMPUSGO_LOCAL_IDP_HASH:?Run make env}
+    volumes: ["./dex/config.yaml:/etc/dex/config.yaml:ro"]
+    mem_limit: 128m
+
   apisix:
     image: apache/apisix:3.19.0-debian@sha256:9a7e45dc943fbf10ec916d1232bae4cda9302ae28a4696cfb83c2da01d261141
     profiles: [gateway]

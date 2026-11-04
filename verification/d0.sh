@@ -4,7 +4,7 @@ cd "$(dirname "$0")/.."
 mkdir -p work
 docker compose --env-file .env -f deploy/local/compose.yaml --profile gateway up -d --wait
 docker compose --env-file .env -f deploy/local/compose.yaml wait rmq-init
-./bin/migrate -dir verification/migrations -database campusgo_verification up
+./bin/migrate -dir verification/migrations -table goose_db_version -database campusgo_verification up
 ./bin/api >work/api-verification.log 2>&1 &
 api_pid=$!
 ./bin/worker >work/worker-verification.log 2>&1 &

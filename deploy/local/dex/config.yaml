@@ -1,0 +1,39 @@
+issuer: http://127.0.0.1:15556/dex
+storage:
+  type: memory
+web:
+  http: 0.0.0.0:5556
+oauth2:
+  grantTypes: [authorization_code]
+  responseTypes: [code]
+  skipApprovalScreen: true
+  pkce:
+    enforce: true
+    codeChallengeMethodsSupported: [S256]
+staticClients:
+  - id: campusgo-web
+    name: CampusGo Local
+    secretEnv: CAMPUSGO_OIDC_CLIENT_SECRET
+    redirectURIs: [http://127.0.0.1:18080/api/auth/oidc/callback]
+enablePasswordDB: true
+staticPasswords:
+  - email: publisher@campusgo.local
+    username: publisher
+    userID: "1001"
+    hashFromEnv: CAMPUSGO_LOCAL_IDP_HASH
+  - email: runner-a@campusgo.local
+    username: runner-a
+    userID: "2001"
+    hashFromEnv: CAMPUSGO_LOCAL_IDP_HASH
+  - email: runner-b@campusgo.local
+    username: runner-b
+    userID: "2002"
+    hashFromEnv: CAMPUSGO_LOCAL_IDP_HASH
+  - email: arbitrator@campusgo.local
+    username: arbitrator
+    userID: "9001"
+    hashFromEnv: CAMPUSGO_LOCAL_IDP_HASH
+  - email: unbound@campusgo.local
+    username: unbound
+    userID: "unbound"
+    hashFromEnv: CAMPUSGO_LOCAL_IDP_HASH
