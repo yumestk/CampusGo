@@ -1,0 +1,16 @@
+apisix:
+  node_listen: 9080
+  enable_ipv6: false
+deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+nginx_config:
+  worker_processes: 1
+  error_log: /dev/stderr
+  envs: [CAMPUSGO_REDIS_PASSWORD]
+plugins:
+  - proxy-rewrite
+  - limit-count
+  - limit-conn
+  - serverless-pre-function

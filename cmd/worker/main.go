@@ -8,8 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/yumestk/CampusGo/internal/platform/config"
 	"github.com/yumestk/CampusGo/internal/platform/server"
+	"github.com/yumestk/CampusGo/internal/platform/telemetry"
 )
 
 func main() {
@@ -23,6 +25,7 @@ func main() {
 	defer stop()
 	router := http.NewServeMux()
 	router.HandleFunc("GET /livez", server.Liveness("worker"))
+	router.Handle("GET /metrics", promhttp.HandlerFor(telemetry.NewRegistry("worker"), promhttp.HandlerOpts{}))
 	if err := server.Run(ctx, cfg, router, logger); err != nil {
 		logger.Error("server failed", "error", err)
 		os.Exit(1)

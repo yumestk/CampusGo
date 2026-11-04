@@ -10,6 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yumestk/CampusGo/internal/platform/config"
 	"github.com/yumestk/CampusGo/internal/platform/server"
+	"github.com/yumestk/CampusGo/internal/platform/telemetry"
 	"github.com/yumestk/CampusGo/internal/transport/httpapi"
 )
 
@@ -23,7 +24,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	gin.SetMode(gin.ReleaseMode)
-	if err := server.Run(ctx, cfg, httpapi.NewRouter(), logger); err != nil {
+	if err := server.Run(ctx, cfg, httpapi.NewRouter(logger, telemetry.NewRegistry("api")), logger); err != nil {
 		logger.Error("server failed", "error", err)
 		os.Exit(1)
 	}

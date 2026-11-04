@@ -1,0 +1,62 @@
+# Local D0 verification routes; not the D6 business gateway policy.
+routes:
+  - id: api-liveness
+    uri: /livez
+    upstream:
+      type: roundrobin
+      nodes:
+        "host.docker.internal:18080": 1
+  - id: internal-deny
+    uri: /api/internal/*
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - "return function() return ngx.exit(404) end"
+  - id: probe-headers
+    uri: /__probe/headers
+    plugins:
+      proxy-rewrite:
+        headers:
+          remove: [X-User-Id, X-Runner-Id, X-Campus-Id, X-Internal-Token, Forwarded, X-Forwarded-For]
+    upstream:
+      type: roundrobin
+      nodes:
+        "host.docker.internal:18083": 1
+  - id: probe-ws
+    uri: /__probe/ws
+    enable_websocket: true
+    upstream:
+      type: roundrobin
+      nodes:
+        "host.docker.internal:18083": 1
+  - id: probe-rate
+    uri: /__probe/rate
+    plugins:
+      limit-count:
+        count: 2
+        time_window: 60
+        key: http_x_probe_run
+        rejected_code: 429
+        policy: redis
+        redis_host: redis
+        redis_password: "${{CAMPUSGO_REDIS_PASSWORD}}"
+        allow_degradation: false
+    upstream:
+      type: roundrobin
+      nodes:
+        "host.docker.internal:18083": 1
+  - id: probe-concurrency
+    uri: /__probe/slow
+    plugins:
+      limit-conn:
+        conn: 1
+        burst: 0
+        default_conn_delay: 0.1
+        key: remote_addr
+        rejected_code: 503
+    upstream:
+      type: roundrobin
+      nodes:
+        "host.docker.internal:18083": 1
+#END

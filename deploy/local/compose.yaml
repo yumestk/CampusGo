@@ -1,0 +1,134 @@
+name: campusgo
+
+services:
+  mysql:
+    image: mysql:8.0.40@sha256:d58ac93387f644e4e040c636b8f50494e78e5afc27ca0a87348b2f577da2b7ff
+    ports: ["127.0.0.1:13306:3306"]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${CAMPUSGO_MYSQL_ROOT_PASSWORD:?Generate a local .env first}
+      MYSQL_DATABASE: campusgo
+      MYSQL_USER: campusgo
+      MYSQL_PASSWORD: ${CAMPUSGO_MYSQL_PASSWORD:?Generate a local .env first}
+      TZ: UTC
+    command:
+      - --transaction-isolation=READ-COMMITTED
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-connections=60
+      - --innodb-buffer-pool-size=134217728
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql/init.sql:/docker-entrypoint-initdb.d/10-verification.sql:ro
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD-SHELL", 'MYSQL_PWD="$$MYSQL_PASSWORD" mysql -h 127.0.0.1 -ucampusgo -e "SELECT 1" >/dev/null']
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  redis:
+    image: redis:7.4-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+    ports: ["127.0.0.1:16379:6379"]
+    environment:
+      CAMPUSGO_REDIS_PASSWORD: ${CAMPUSGO_REDIS_PASSWORD:?Generate a local .env first}
+    command:
+      - sh
+      - -ec
+      - exec redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy noeviction --requirepass "$$CAMPUSGO_REDIS_PASSWORD"
+    volumes: ["redis-data:/data"]
+    mem_limit: 128m
+    healthcheck:
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$CAMPUSGO_REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  rmqnamesrv:
+    image: apache/rocketmq:5.3.1@sha256:d2b231c1b9204129e4f4dd65ec1521c81b8d6826e5f1fe8daa521dab0db5bf16
+    ports: ["127.0.0.1:19876:9876"]
+    command: sh mqnamesrv
+    environment:
+      JAVA_OPT_EXT: -server -Xms128m -Xmx128m -Xmn64m
+    mem_limit: 384m
+    healthcheck:
+      test: ["CMD-SHELL", 'bash -c "echo > /dev/tcp/127.0.0.1/9876"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  rmq-volume-init:
+    image: apache/rocketmq:5.3.1@sha256:d2b231c1b9204129e4f4dd65ec1521c81b8d6826e5f1fe8daa521dab0db5bf16
+    user: root
+    entrypoint: ["sh", "-ec", "chown -R rocketmq:rocketmq /home/rocketmq/store /home/rocketmq/logs"]
+    volumes:
+      - rmq-store:/home/rocketmq/store
+      - rmq-logs:/home/rocketmq/logs
+    mem_limit: 64m
+
+  rmqbroker:
+    image: apache/rocketmq:5.3.1@sha256:d2b231c1b9204129e4f4dd65ec1521c81b8d6826e5f1fe8daa521dab0db5bf16
+    ports: ["127.0.0.1:18082:18082"]
+    command: sh mqbroker -n rmqnamesrv:9876 -c /home/rocketmq/broker.conf --enable-proxy
+    depends_on:
+      rmqnamesrv: {condition: service_healthy}
+      rmq-volume-init: {condition: service_completed_successfully}
+    environment:
+      JAVA_OPT_EXT: -server -Xms384m -Xmx384m -Xmn128m
+    volumes:
+      - ./rocketmq/broker.conf:/home/rocketmq/broker.conf:ro
+      - ./rocketmq/proxy.json:/home/rocketmq/rocketmq-5.3.1/conf/rmq-proxy.json:ro
+      - rmq-store:/home/rocketmq/store
+      - rmq-logs:/home/rocketmq/logs
+    mem_limit: 1024m
+    healthcheck:
+      test: ["CMD-SHELL", 'bash -c "echo > /dev/tcp/127.0.0.1/18082"']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  rmq-init:
+    image: apache/rocketmq:5.3.1@sha256:d2b231c1b9204129e4f4dd65ec1521c81b8d6826e5f1fe8daa521dab0db5bf16
+    network_mode: service:rmqbroker
+    depends_on:
+      rmqbroker: {condition: service_healthy}
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        set -euo pipefail
+        ready=false
+        for attempt in $$(seq 1 45); do
+          if sh mqadmin clusterList -n rmqnamesrv:9876 2>/dev/null | grep -q CampusGoD0; then
+            ready=true
+            break
+          fi
+          sleep 2
+        done
+        test "$$ready" = true
+        sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-d0-transaction -a +message.type=TRANSACTION
+        sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-d0-delay -a +message.type=DELAY
+        sh mqadmin updateSubGroup -n rmqnamesrv:9876 -c CampusGoD0 -g campusgo-d0-tx-consumer
+        sh mqadmin topicList -n rmqnamesrv:9876 | grep -Fx campusgo-d0-transaction
+        sh mqadmin topicList -n rmqnamesrv:9876 | grep -Fx campusgo-d0-delay
+    environment:
+      JAVA_OPT_EXT: -Xms64m -Xmx128m
+    mem_limit: 256m
+
+  apisix:
+    image: apache/apisix:3.19.0-debian@sha256:9a7e45dc943fbf10ec916d1232bae4cda9302ae28a4696cfb83c2da01d261141
+    profiles: [gateway]
+    ports: ["127.0.0.1:19080:9080"]
+    environment:
+      CAMPUSGO_REDIS_PASSWORD: ${CAMPUSGO_REDIS_PASSWORD:?Generate a local .env first}
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    volumes:
+      - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
+      - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+    depends_on:
+      redis: {condition: service_healthy}
+    mem_limit: 256m
+
+volumes:
+  mysql-data:
+  redis-data:
+  rmq-store:
+  rmq-logs:
