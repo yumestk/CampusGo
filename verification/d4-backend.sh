@@ -5,6 +5,7 @@ mkdir -p work
 docker compose --env-file .env -f deploy/local/compose.yaml up -d --wait mysql redis rmqbroker
 docker compose --env-file .env -f deploy/local/compose.yaml up -d --force-recreate rmq-init
 docker compose --env-file .env -f deploy/local/compose.yaml wait rmq-init
+./bin/probe -component mq-route
 for db in campusgo campusgo_verification; do
  ./bin/migrate -database "$db" up
  ./bin/seed -database "$db"
