@@ -686,6 +686,39 @@ func testD5MQ(t *testing.T, ctx context.Context, db *sql.DB, f *Funds, publisher
 		t.Fatal(err)
 	}
 	defer producer.GracefulStop()
+
+	// Inject application-side loss AFTER a real half-message acknowledgment, then
+	// prove that no funds SQL ran and the durable expiry fence resolves rollback.
+	originalSender := f.Send
+	abortedID := delivered(1001)
+	abortedKey := uuid.NewString()
+	f.Send = func(c context.Context, e FundEvent) (func(bool) error, error) {
+		body, _ := json.Marshal(e)
+		m := &rmq.Message{Topic: "campusgo-funds", Body: body}
+		m.SetKeys("campusgo_verification:" + e.RequestID)
+		m.SetTag("campusgo_verification")
+		tx := producer.BeginTransaction()
+		if _, err := producer.SendWithTransaction(c, m, tx); err != nil {
+			return nil, err
+		}
+		return nil, io.EOF
+	}
+	_, sendError := f.Execute(ctx, publisher, abortedKey, FundCommand{ErrandID: abortedID, Round: 0, Action: "SETTLE"})
+	requireCode(t, sendError, "FUND_RESULT_UNKNOWN")
+	var abortedStatus string
+	if err := db.QueryRow("SELECT status FROM errand WHERE id=?", abortedID).Scan(&abortedStatus); err != nil || abortedStatus != "DELIVERED" {
+		t.Fatal("SQL ran without a received half acknowledgment", abortedStatus, err)
+	}
+	if _, err := db.Exec("UPDATE fund_request SET expires_at=TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(3)) WHERE request_id=?", abortedKey); err != nil {
+		t.Fatal(err)
+	}
+	if f.Check(ctx, event(abortedKey)) != "ROLLBACK" {
+		t.Fatal("half acknowledgment loss was not safely fenced")
+	}
+	f.Send = originalSender
+	if _, err := f.Execute(ctx, publisher, uuid.NewString(), FundCommand{ErrandID: abortedID, Round: 0, Action: "SETTLE"}); err != nil {
+		t.Fatal(err)
+	}
 	dropOriginal := true
 	original := f.Send
 	defer func() { f.Send = original }()
@@ -738,6 +771,9 @@ func testD5MQ(t *testing.T, ctx context.Context, db *sql.DB, f *Funds, publisher
 			ev, e := decodeFund(m.GetBody())
 			if e != nil {
 				t.Fatal(e)
+			}
+			if ev.RequestID == abortedKey {
+				t.Fatal("rolled-back half message became visible")
 			}
 			if ev.RequestID == key {
 				if result, e := f.Receive(ctx, m.GetBody()); e != nil || result != "RECEIVED" {
@@ -804,6 +840,9 @@ func testD5MQ(t *testing.T, ctx context.Context, db *sql.DB, f *Funds, publisher
 			ev, e := decodeFund(m.GetBody())
 			if e != nil {
 				t.Fatal(e)
+			}
+			if ev.RequestID == abortedKey {
+				t.Fatal("rolled-back half message became visible")
 			}
 			if ev.RequestID == key2 {
 				if _, e = f.Receive(ctx, m.GetBody()); e != nil {

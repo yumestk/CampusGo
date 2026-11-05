@@ -1,6 +1,6 @@
 export interface User { id: string; campusId: string; name: string; role: string }
 export interface Session { token: string; userId: string; expiresIn: string }
-export interface Card { id: string; campusId: string; publisherId: string; grabberId: string | null; title: string; type: string; status: string; rewardCents: string; slotTaken: number; slotTotal: number; round: number; confirmDeadline?: string | null; role: string; availableActions: string[] }
+export interface Card { id: string; campusId: string; publisherId: string; grabberId: string | null; title: string; type: string; status: string; rewardCents: string; slotTaken: number; slotTotal: number; round: number; confirmDeadline?: string | null; deliveredAt?: string | null; role: string; availableActions: string[] }
 export interface Page { items: Card[]; nextCursor: string }
 export interface StatusChange { time: string; from: string; to: string; round: number; operatorId: string }
 export interface AuthConfig { demoLoginEnabled: boolean; oidcEnabled: boolean; oidcCallbackOrigin: string }
@@ -10,6 +10,7 @@ export interface LedgerPage { items: LedgerEntry[]; nextCursor: string }
 export interface Escrow { errandId: string; amountCents: string; status: string }
 export interface PublishCommand { campusId: string; type: string; title: string; rewardCents: string; slotTotal: number }
 export interface PublishResult { requestKey: string; state: 'SUCCEEDED' | 'REJECTED' | 'NOT_OBSERVED'; errandId: string | null; status: string; frozenCents: string; errorCode: string }
+export interface FundResult {requestId:string;state:"PREPARED"|"COMMITTED"|"ABORTED"|"NOT_OBSERVED";errandId:string;status:string;errorCode:string}
 export interface GrabResult {requestKey:string;errandId:string;state:"PROCESSING"|"SUCCEEDED"|"REJECTED"|"EXPIRED"|"NOT_OBSERVED";errorCode:string;appliedRound:number;retryAfterMillis:number}
 export class ApiError extends Error {
   code: string; status: number; retryAfterMillis: number;
@@ -72,6 +73,9 @@ export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'rem
     async logout() { const sentToken = token; await request('/api/auth/logout', 'POST'); if (token === sentToken) clear(); },
     list: (cursor = '', status = 'PUBLISHED') => list(`/api/errands?cursor=${encodeURIComponent(cursor)}&status=${encodeURIComponent(status)}`),
     mine: (role: string, cursor = '') => list(`/api/errands/mine?cursor=${encodeURIComponent(cursor)}&role=${encodeURIComponent(role)}`),
+    credit:()=>request<{score:number;version:string}>('/api/credit'),
+    action:(id:string,expectedRound:number,action:string,key?:string)=>request<Card|FundResult>(`/api/errands/${encodeURIComponent(id)}/actions`,'POST',{expectedRound,action},true,key),
+    async fundResult(key:string){const r=await request<FundResult>(`/api/fund-requests/${encodeURIComponent(key)}`);if(!r||r.requestId!==key||!['PREPARED','COMMITTED','ABORTED','NOT_OBSERVED'].includes(r.state)||!validInteger(r.errandId)||typeof r.errorCode!=='string')invalid();return r;},
     async confirm(id:string,expectedRound:number){return cardValue(await request<Card>(`/api/errands/${encodeURIComponent(id)}/confirm`,'POST',{expectedRound}));},
     async detail(id: string) { return cardValue(await request<Card>(`/api/errands/${encodeURIComponent(id)}`)); },
     timeline: (id: string) => request<StatusChange[]>(`/api/errands/${encodeURIComponent(id)}/timeline`),
