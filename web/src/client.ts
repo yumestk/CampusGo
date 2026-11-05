@@ -10,6 +10,7 @@ export interface LedgerPage { items: LedgerEntry[]; nextCursor: string }
 export interface Escrow { errandId: string; amountCents: string; status: string }
 export interface PublishCommand { campusId: string; type: string; title: string; rewardCents: string; slotTotal: number }
 export interface PublishResult { requestKey: string; state: 'SUCCEEDED' | 'REJECTED' | 'NOT_OBSERVED'; errandId: string | null; status: string; frozenCents: string; errorCode: string }
+export interface GrabResult {requestKey:string;errandId:string;state:"PROCESSING"|"SUCCEEDED"|"REJECTED"|"EXPIRED"|"NOT_OBSERVED";errorCode:string;appliedRound:number;retryAfterMillis:number}
 export class ApiError extends Error {
   code: string; status: number; retryAfterMillis: number;
   constructor(code: string, message: string, status = 0, retryAfterMillis = 0) { super(message); this.code = code; this.status = status; this.retryAfterMillis = retryAfterMillis; }
@@ -37,7 +38,7 @@ export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'rem
   if (token && !/^[A-Za-z0-9_-]{43}$/.test(token)) { token = null; storage.removeItem(key); }
   function clear() { token = null; storage.removeItem(key); unauthorized(); }
   function acceptSession(value: Session) { const valid = sessionValue(value); storage.setItem(key, valid.token); token = valid.token; }
-  async function request<T>(path: string, method = 'GET', body?: unknown, authenticated = true, idempotencyKey?: string): Promise<T> {
+  async function request<T>(path: string, method = 'GET', body?: unknown, authenticated = true, idempotencyKey?: string, acceptGrabTerminal = false): Promise<T> {
     const sentToken = authenticated ? token : null;
     const headers: Record<string, string> = { 'X-Request-Id': crypto.randomUUID() };
     if (sentToken) headers.Authorization = `Bearer ${sentToken}`;
@@ -51,6 +52,7 @@ export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'rem
     try { result = await response.json(); } catch { throw new ApiError('INVALID_RESPONSE', '服务暂时不可用，请稍后重试', response.status); }
     if (typeof result?.code !== 'string') invalid();
     if (!response.ok || result.code !== 'OK') {
+      if(acceptGrabTerminal && response.status===409){const r=result.data as GrabResult;if(r&&['REJECTED','EXPIRED'].includes(r.state)&&r.errorCode===result.code)return result.data;}
       const seconds = Number(response.headers.get('Retry-After'));
       const retry = response.status === 503 || response.status === 429 ? (Number.isFinite(seconds) && seconds > 0 && seconds <= 60 ? seconds * 1000 : 1000) : 0;
       throw new ApiError(result.code, result.message || '请求失败，请重试', response.status, retry);
@@ -75,6 +77,8 @@ export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'rem
     async balance() { const b = await request<Balance>('/api/wallet'); if (!b || ![b.availableCents,b.frozenCents,b.version].every(validInteger)) invalid(); return b; },
     async ledger(cursor = '') { const p = await request<LedgerPage>(`/api/wallet/ledger?cursor=${encodeURIComponent(cursor)}`); if (!p || !Array.isArray(p.items) || typeof p.nextCursor !== 'string') invalid(); for (const e of p.items) if (![e.id,e.amountCents,e.balanceAfterCents,e.accountVersion,e.refId].every(validInteger)) invalid(); return p; },
     async escrow(id: string) { const r = await request<Escrow>(`/api/errands/${encodeURIComponent(id)}/escrow`); if (!r || !validInteger(r.errandId) || !validInteger(r.amountCents)) invalid(); return r; },
+    async grab(key:string,id:string,expectedRound:number) {return grabValue(await request<GrabResult>(`/api/errands/${encodeURIComponent(id)}/grab`,"POST",{expectedRound},true,key,true),key,id);},
+    async grabResult(key:string,id:string) {return grabValue(await request<GrabResult>(`/api/errands/${encodeURIComponent(id)}/grab-requests/${encodeURIComponent(key)}`,"GET",undefined,true,undefined,true),key,id);},
     async publish(key: string, command: PublishCommand) { return publishValue(await request<PublishResult>('/api/errands','POST',command,true,key),key); },
     async publishResult(key: string) { return publishValue(await request<PublishResult>(`/api/publish-requests/${encodeURIComponent(key)}`),key); },
   };
@@ -92,4 +96,9 @@ export function yuanToCents(value: string): string {
   const cents = BigInt(whole) * 100n + BigInt(fraction.padEnd(2,'0'));
   if (cents <= 0n || cents > 9223372036854775807n) throw new Error('金额超出允许范围');
   return cents.toString();
+}
+
+function grabValue(r:GrabResult,key:string,id:string){
+ if(!r||r.requestKey!==key||r.errandId!==id||!["PROCESSING","SUCCEEDED","REJECTED","EXPIRED","NOT_OBSERVED"].includes(r.state)||!Number.isInteger(r.appliedRound)||r.appliedRound<0||r.appliedRound>2147483647||!Number.isInteger(r.retryAfterMillis)||r.retryAfterMillis<0||r.retryAfterMillis>60000||typeof r.errorCode!=="string"||(["REJECTED","EXPIRED"].includes(r.state)&&!r.errorCode)||(["PROCESSING","SUCCEEDED","NOT_OBSERVED"].includes(r.state)&&r.errorCode!==""))invalid();
+ return r;
 }
