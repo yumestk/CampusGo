@@ -69,7 +69,13 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	router := httpapi.NewRouter(logger, telemetry.NewRegistry("api"))
-	httpapi.RegisterBusiness(router, &auth.Service{DB: db, Redis: cache, Config: identityConfig}, errand.Query{DB: db}, &errand.Publisher{DB: db, IDs: ids})
+	registry := telemetry.NewRegistry("api")
+	router := httpapi.NewRouter(logger, registry)
+	details := errand.NewDetailCache(cache, dbName, registry)
+	refreshCtx, stopRefresh := context.WithCancel(ctx)
+	refreshDone := make(chan struct{})
+	go func() { defer close(refreshDone); details.RunRefresh(refreshCtx, db) }()
+	defer func() { stopRefresh(); <-refreshDone }()
+	httpapi.RegisterBusiness(router, &auth.Service{DB: db, Redis: cache, Config: identityConfig}, errand.Query{DB: db, Cache: details}, &errand.Publisher{DB: db, IDs: ids}, &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: dbName})
 	return server.Run(ctx, cfg, router, logger)
 }

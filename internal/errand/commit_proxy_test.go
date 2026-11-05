@@ -20,7 +20,12 @@ import (
 // This isolated, plaintext local MySQL proxy drops the server's OK packet for COMMIT.
 // Unlike returning a synthetic service error, the real SQL driver sees the lost acknowledgment.
 func commitAckProxy(t *testing.T) (string, <-chan struct{}) {
+	return commitAckProxyAt(t, 1)
+}
+
+func commitAckProxyAt(t *testing.T, target int64) (string, <-chan struct{}) {
 	t.Helper()
+	var commits atomic.Int64
 	upstream := os.Getenv("CAMPUSGO_MYSQL_ADDR")
 	if upstream == "" {
 		upstream = "127.0.0.1:13306"
@@ -78,7 +83,7 @@ func commitAckProxy(t *testing.T) (string, <-chan struct{}) {
 						return
 					}
 					if fromClient && len(payload) > 1 && payload[0] == 3 && strings.EqualFold(strings.TrimSpace(string(payload[1:])), "COMMIT") {
-						committing.Store(true)
+						committing.Store(commits.Add(1) == target)
 					}
 					if !fromClient && committing.Load() && len(payload) > 0 && payload[0] == 0 {
 						once.Do(func() { close(dropped) })

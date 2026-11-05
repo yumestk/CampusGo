@@ -2,32 +2,67 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/config"
+	"github.com/yumestk/CampusGo/internal/platform/database"
+	"github.com/yumestk/CampusGo/internal/platform/rediscache"
 	"github.com/yumestk/CampusGo/internal/platform/server"
 	"github.com/yumestk/CampusGo/internal/platform/telemetry"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil)).With("service", "worker")
+	if err := run(logger); err != nil {
+		logger.Error("worker failed", "error", err)
+		os.Exit(1)
+	}
+}
+func run(logger *slog.Logger) error {
 	cfg, err := config.Load("worker")
 	if err != nil {
-		logger.Error("invalid configuration", "error", err)
-		os.Exit(1)
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	name := os.Getenv("CAMPUSGO_DATABASE")
+	if name == "" {
+		name = "campusgo"
+	}
+	if name != "campusgo" && !(name == "campusgo_verification" && os.Getenv("CAMPUSGO_ENV") == "test") {
+		return fmt.Errorf("invalid database for environment")
+	}
+	connect, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	db, err := database.Open(connect, name)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	cache, err := rediscache.Open()
+	if err != nil {
+		return err
+	}
+	defer cache.Close()
+	g := &errand.Grabber{DB: db, Redis: cache, Namespace: name}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		g.RunRecovery(ctx, func(err error) { logger.Error("grab recovery failed", "cause_type", fmt.Sprintf("%T", err)) })
+	}()
 	router := http.NewServeMux()
 	router.HandleFunc("GET /livez", server.Liveness("worker"))
 	router.Handle("GET /metrics", promhttp.HandlerFor(telemetry.NewRegistry("worker"), promhttp.HandlerOpts{}))
-	if err := server.Run(ctx, cfg, router, logger); err != nil {
-		logger.Error("server failed", "error", err)
-		os.Exit(1)
-	}
+	err = server.Run(ctx, cfg, router, logger)
+	stop()
+	<-done
+	return err
 }

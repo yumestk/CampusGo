@@ -41,7 +41,10 @@ type ListOptions struct {
 	BeforeTime   time.Time
 	Page, Size   int
 }
-type Query struct{ DB *sql.DB }
+type Query struct {
+	DB    *sql.DB
+	Cache *DetailCache
+}
 
 const columns = "id,campus_id,publisher_id,grabber_id,type,title,reward_amount,slot_total,slot_taken,status,round,version,created_at"
 
@@ -90,7 +93,10 @@ func (o ListOptions) Validate(viewer auth.User) error {
 	return nil
 }
 func decorate(c *Card, viewer auth.User) {
-	c.AvailableActions = []string{} // Writes are introduced and advertised only in their implementing stages.
+	c.AvailableActions = []string{}
+	if c.CampusID == viewer.CampusID && c.Status == "PUBLISHED" && c.PublisherID != viewer.ID && (viewer.Role == "STUDENT" || viewer.Role == "ARBITRATOR") {
+		c.AvailableActions = append(c.AvailableActions, "GRAB")
+	}
 	c.Role = "VIEWER"
 	if c.GrabberID != nil && *c.GrabberID == viewer.ID {
 		c.Role = "CURRENT_RUNNER"
@@ -159,6 +165,9 @@ func (q Query) List(ctx context.Context, viewer auth.User, o ListOptions) (Page,
 	return page, nil
 }
 func (q Query) Detail(ctx context.Context, viewer auth.User, id int64) (Card, error) {
+	if q.Cache != nil {
+		return q.cachedDetail(ctx, viewer, id)
+	}
 	c, err := scan(q.DB.QueryRowContext(ctx, "SELECT "+columns+" FROM errand WHERE id=? AND campus_id=?", id, viewer.CampusID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, fault.New("ERRAND_NOT_FOUND", 404)
