@@ -119,7 +119,25 @@ func (c *Client) session(ctx context.Context, f *errand.Funds, endpoint string, 
 			return fmt.Errorf("fund producer session requires registration recovery")
 		}
 	}
-	consumer, err := rmq.NewSimpleConsumer(&rmq.Config{Endpoint: endpoint, ConsumerGroup: "campusgo-funds-" + c.Namespace, Credentials: &credentials.SessionCredentials{}}, rmq.WithSimpleAwaitDuration(6*time.Second), rmq.WithSimpleSubscriptionExpressions(map[string]*rmq.FilterExpression{Topic: rmq.NewFilterExpression(c.Namespace)}))
+	return consumeSession(ctx, f, endpoint, "campusgo-funds-"+c.Namespace, c.Namespace, restart, nil, onError)
+}
+
+// RunPush has no producer and never gates funds.Send availability. A broken
+// realtime subscription must not withdraw the business transaction producer.
+func RunPush(ctx context.Context, f *errand.Funds, endpoint, namespace string, push func(context.Context, errand.FundEvent) error, onError func(error)) {
+	for ctx.Err() == nil {
+		if err := consumeSession(ctx, f, endpoint, "campusgo-funds-push-"+namespace, namespace, nil, push, onError); err != nil && ctx.Err() == nil {
+			onError(err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+func consumeSession(ctx context.Context, f *errand.Funds, endpoint, group, namespace string, restart <-chan struct{}, push func(context.Context, errand.FundEvent) error, onError func(error)) error {
+	consumer, err := rmq.NewSimpleConsumer(&rmq.Config{Endpoint: endpoint, ConsumerGroup: group, Credentials: &credentials.SessionCredentials{}}, rmq.WithSimpleAwaitDuration(6*time.Second), rmq.WithSimpleSubscriptionExpressions(map[string]*rmq.FilterExpression{Topic: rmq.NewFilterExpression(namespace)}))
 	if err != nil {
 		return err
 	}
@@ -147,10 +165,19 @@ func (c *Client) session(ctx context.Context, f *errand.Funds, endpoint string, 
 			work, cancel := context.WithTimeout(ctx, 5*time.Second)
 			keys := m.GetKeys()
 			var event errand.FundEvent
-			if (m.GetTag() == nil || *m.GetTag() != c.Namespace) || json.Unmarshal(m.GetBody(), &event) != nil || len(keys) != 1 || keys[0] != c.Namespace+":"+event.RequestID {
+			if (m.GetTag() == nil || *m.GetTag() != namespace) || json.Unmarshal(m.GetBody(), &event) != nil || len(keys) != 1 || keys[0] != namespace+":"+event.RequestID {
 				e = consumer.Ack(work, m)
 			} else {
-				_, e = f.Receive(work, m.GetBody())
+				if push != nil {
+					if f.Check(work, event) == "COMMIT" {
+						if pushErr := push(work, event); pushErr != nil {
+							onError(pushErr)
+						}
+					}
+					e = nil // Realtime never consumes the durable receipt or retries delivery.
+				} else {
+					_, e = f.Receive(work, m.GetBody())
+				}
 				if e == nil {
 					e = consumer.Ack(work, m)
 				}

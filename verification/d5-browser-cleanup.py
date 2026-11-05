@@ -40,6 +40,7 @@ for user,row in data['credit'].items():
  else:commands.append(f'INSERT INTO d5_browser_guard SELECT COUNT(*) FROM credit_score WHERE user_id={user} FOR UPDATE;')
  commands.append(f'UPDATE credit_score SET score={score},version={version} WHERE user_id={user};' if row else f'DELETE FROM credit_score WHERE user_id={user};')
 commands += [
+'DELETE FROM notification WHERE errand_id IN (SELECT id FROM d5_browser_tasks);',
 'DELETE FROM fund_event_receipt WHERE request_id IN (SELECT request_id FROM fund_request WHERE errand_id IN (SELECT id FROM d5_browser_tasks));',
 'DELETE FROM fund_request WHERE errand_id IN (SELECT id FROM d5_browser_tasks);',
 'DELETE FROM credit_event WHERE errand_id IN (SELECT id FROM d5_browser_tasks);',

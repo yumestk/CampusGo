@@ -14,6 +14,7 @@ import (
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/fundmq"
+	"github.com/yumestk/CampusGo/internal/notify"
 	"github.com/yumestk/CampusGo/internal/platform/config"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
@@ -78,8 +79,28 @@ func run(logger *slog.Logger) error {
 	go func() { defer close(refreshDone); details.RunRefresh(refreshCtx, db) }()
 	defer func() { stopRefresh(); <-refreshDone }()
 	g := &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: dbName}
+	identity := &auth.Service{DB: db, Redis: cache, Config: identityConfig}
+	hub := notify.NewHub(identity, dbName)
+	hubCtx, stopHub := context.WithCancel(ctx)
+	hubDone := make(chan struct{})
+	go func() { defer close(hubDone); hub.Run(hubCtx) }()
+	defer func() { stopHub(); <-hubDone }()
 	mq := &fundmq.Client{Namespace: dbName}
 	funds := &errand.Funds{Grabber: g, Send: mq.Send, Events: errand.NewFundMetrics(registry)}
+	pushCtx, stopPush := context.WithCancel(ctx)
+	pushDone := make(chan struct{})
+	go func() {
+		defer close(pushDone)
+		fundmq.RunPush(pushCtx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), dbName, func(c context.Context, e errand.FundEvent) error {
+			for user, content := range errand.FundNotices(e) {
+				if x := hub.Publish(c, user, notify.Event{Type: "notification.new", Payload: map[string]string{"errandId": strconv.FormatInt(e.ErrandID, 10), "noticeType": e.Kind, "content": content}}); x != nil {
+					return x
+				}
+			}
+			return nil
+		}, func(e error) { logger.Error("fund push unavailable", "cause_type", fmt.Sprintf("%T", e)) })
+	}()
+	defer func() { stopPush(); <-pushDone }()
 	mqCtx, stopMQ := context.WithCancel(ctx)
 	mqDone := make(chan struct{})
 	go func() {
@@ -87,6 +108,7 @@ func run(logger *slog.Logger) error {
 		mq.Run(mqCtx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), false, func(e error) { logger.Error("fund MQ operation failed", "cause_type", fmt.Sprintf("%T", e)) })
 	}()
 	defer func() { stopMQ(); <-mqDone }()
-	httpapi.RegisterBusiness(router, &auth.Service{DB: db, Redis: cache, Config: identityConfig}, errand.Query{DB: db, Cache: details}, &errand.Publisher{DB: db, IDs: ids, Funds: funds}, g)
+	httpapi.RegisterRealtime(router, identity, hub)
+	httpapi.RegisterBusiness(router, identity, errand.Query{DB: db, Cache: details}, &errand.Publisher{DB: db, IDs: ids, Funds: funds}, g)
 	return server.Run(ctx, cfg, router, logger)
 }

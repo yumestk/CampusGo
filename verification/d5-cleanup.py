@@ -13,6 +13,7 @@ INSERT INTO d5_guard SELECT COUNT(*) FROM app_user WHERE id IN ({users}) AND dis
 INSERT INTO d5_guard SELECT COUNT(*) FROM errand WHERE publisher_id IN ({users}) AND title<>'D5验证任务';
 CREATE TEMPORARY TABLE d5_tasks AS SELECT id FROM errand WHERE publisher_id IN ({users});
 START TRANSACTION;
+DELETE FROM notification WHERE errand_id IN (SELECT id FROM d5_tasks);
 DELETE FROM fund_event_receipt WHERE request_id IN (SELECT request_id FROM fund_request WHERE errand_id IN (SELECT id FROM d5_tasks));
 DELETE FROM fund_request WHERE errand_id IN (SELECT id FROM d5_tasks);
 DELETE FROM credit_event WHERE errand_id IN (SELECT id FROM d5_tasks) OR user_id IN ({users});

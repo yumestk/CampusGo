@@ -501,6 +501,30 @@ func TestIntegrationD5(t *testing.T) {
 			t.Fatal(ok, e)
 		}
 		body, _ := json.Marshal(event(key))
+		// A notification write failure must roll back the receipt and leave the
+		// durable recovery request runnable. No money is transferred by Receive.
+		exec("ALTER TABLE notification ADD CONSTRAINT ck_d7_injected CHECK(msg_key<>'" + key + "')")
+		_, receiveErr := f.Receive(ctx, body)
+		exec("ALTER TABLE notification DROP CHECK ck_d7_injected")
+		if receiveErr == nil || count("SELECT COUNT(*) FROM fund_event_receipt WHERE request_id=?", key) != 0 || count("SELECT COUNT(*) FROM fund_request WHERE request_id=? AND recovery_state='DONE'", key) != 0 {
+			t.Fatal("notice failure acknowledged durable event")
+		}
+		var wg sync.WaitGroup
+		for range 10 {
+			wg.Go(func() {
+				if _, e := f.Receive(ctx, body); e != nil {
+					t.Error(e)
+				}
+			})
+		}
+		wg.Wait()
+		if count("SELECT COUNT(*) FROM notification WHERE msg_key=?", key) != 2 {
+			t.Fatal("recipient notification dedup failed")
+		}
+		var text string
+		if e := db.QueryRow("SELECT content FROM notification WHERE msg_key=? AND user_id=?", key, runner.ID).Scan(&text); e != nil || !strings.Contains(text, "951 分") {
+			t.Fatal("net commission notice", text, e)
+		}
 		for range 2 {
 			if result, e := f.Receive(ctx, body); e != nil || result != "RECEIVED" {
 				t.Fatal(result, e)

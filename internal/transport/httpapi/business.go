@@ -18,6 +18,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/errand"
+	"github.com/yumestk/CampusGo/internal/notify"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"github.com/yumestk/CampusGo/internal/transport/wire"
 )
@@ -178,6 +179,7 @@ func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, p *er
 		c.Set("user", u)
 		c.Next()
 	})
+	registerNotifications(protected, q.DB)
 	protected.GET("/users/me", func(c *gin.Context) { ok(c, c.MustGet("user")) })
 	registerFunds(protected, p, q.DB)
 	if len(grabbers) > 0 && grabbers[0] != nil {
@@ -272,4 +274,14 @@ func positiveID(value string) (int64, error) {
 		return 0, fault.New("INVALID_REQUEST", 400)
 	}
 	return id, nil
+}
+
+func RegisterRealtime(router *gin.Engine, s *auth.Service, h *notify.Hub) {
+	router.GET("/api/ws", func(c *gin.Context) {
+		if s.Config.RequireGateway && (len(c.Request.Header.Values("X-CampusGo-Gateway")) != 1 || subtle.ConstantTimeCompare([]byte(c.GetHeader("X-CampusGo-Gateway")), []byte(s.Config.GatewaySecret)) != 1) {
+			fail(c, fault.New("FORBIDDEN", 403))
+			return
+		}
+		h.ServeHTTP(c.Writer, c.Request)
+	})
 }

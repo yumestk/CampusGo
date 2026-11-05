@@ -102,8 +102,7 @@ func committedPostings(ctx context.Context, tx *sql.Tx, e FundEvent) (bool, erro
 	return facts, err
 }
 
-// Receipt validates immutable SQL facts. D7 can add notification inserts in this
-// transaction; delivery never performs the underlying money transfer again.
+// Receipt and recipient notifications commit atomically. Delivery never transfers money.
 func (f *Funds) Receive(ctx context.Context, body []byte) (string, error) {
 	e, err := decodeFund(body)
 	if err != nil {
@@ -138,6 +137,11 @@ func (f *Funds) Receive(ctx context.Context, body []byte) (string, error) {
 	}
 	if _, err = tx.ExecContext(ctx, "INSERT INTO fund_event_receipt(request_id) VALUES(?) ON DUPLICATE KEY UPDATE request_id=request_id", e.RequestID); err != nil {
 		return "", err
+	}
+	for user, content := range FundNotices(e) {
+		if _, err = tx.ExecContext(ctx, "INSERT INTO notification(msg_key,user_id,errand_id,type,content) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id", e.RequestID, user, e.ErrandID, e.Kind, content); err != nil {
+			return "", err
+		}
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE fund_request SET recovery_state='DONE',recovery_token=NULL,recovery_until=NULL WHERE request_id=?", e.RequestID); err != nil {
 		return "", err
@@ -319,4 +323,23 @@ func (f *Funds) Run(ctx context.Context, onError func(error)) {
 		go func() { defer wg.Done(); runEvery(ctx, job.interval, job.fn, onError) }()
 	}
 	wg.Wait()
+}
+
+// FundNotices describes actual recipient postings, including commission and
+// arbitration outcome; a losing runner must never be told they received money.
+func FundNotices(e FundEvent) map[int64]string {
+	pub := fmt.Sprintf("任务已退款，%d 分已退回你的账户", e.Amount)
+	out := map[int64]string{}
+	if fundStatus(e.Kind) == "SETTLED" {
+		pub = fmt.Sprintf("任务已结算，跑腿实收 %d 分，平台佣金 %d 分", e.Amount-e.Commission, e.Commission)
+		out[e.RunnerID] = fmt.Sprintf("任务已结算，你实收 %d 分，平台佣金 %d 分", e.Amount-e.Commission, e.Commission)
+	}
+	if e.Kind == "ARBITRATE_PUBLISHER" {
+		out[e.RunnerID] = "争议已裁决：款项退回发单人，本次未获得报酬"
+	}
+	if e.Kind == "ARBITRATE_PUBLISHER" || e.Kind == "ARBITRATE_RUNNER" {
+		pub = "争议已裁决：" + pub
+	}
+	out[e.PublisherID] = pub
+	return out
 }

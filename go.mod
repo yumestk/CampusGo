@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/apache/rocketmq-clients/golang/v5 v5.1.4
+	github.com/coder/websocket v1.8.15
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/go-jose/go-jose/v4 v4.1.4
