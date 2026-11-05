@@ -232,10 +232,15 @@ func TestIntegrationD4(t *testing.T) {
 		if e != nil || best == nil || best.RunnerID != candidate.ID {
 			t.Fatal("failed grab did not offer", best, e)
 		}
+	})
+	// Keep this dependency-failure check in the full D4 suite while allowing
+	// D8 business acceptance to run candidate eligibility without fault injection.
+	t.Run("candidate_dependency_failure_preserves_durable_rejection", func(t *testing.T) {
+		fresh := locked(newUser(1))
 		broken := *g
 		broken.Redis = redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: time.Millisecond, MaxRetries: -1})
 		defer broken.Redis.Close()
-		r, e = broken.Grab(ctx, newUser(1), uuid.NewString(), GrabCommand{fresh, 0})
+		r, e := broken.Grab(ctx, newUser(1), uuid.NewString(), GrabCommand{fresh, 0})
 		if e != nil || r.State != "REJECTED" {
 			t.Fatal("candidate outage changed durable rejection", r, e)
 		}

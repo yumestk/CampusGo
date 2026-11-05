@@ -12,6 +12,8 @@ export interface PublishCommand { campusId: string; type: string; title: string;
 export interface PublishResult { requestKey: string; state: 'SUCCEEDED' | 'REJECTED' | 'NOT_OBSERVED'; errandId: string | null; status: string; frozenCents: string; errorCode: string }
 export interface FundResult {requestId:string;state:"PREPARED"|"COMMITTED"|"ABORTED"|"NOT_OBSERVED";errandId:string;status:string;errorCode:string}
 export interface GrabResult {requestKey:string;errandId:string;state:"PROCESSING"|"SUCCEEDED"|"REJECTED"|"EXPIRED"|"NOT_OBSERVED";errorCode:string;appliedRound:number;retryAfterMillis:number}
+export interface CreditProfile {score:number;version:string;windowDays:number;events:{id:string;type:string;description:string;delta:number;refId:string;time:string}[]}
+export interface CreditRank {userId:string;score:number}
 export class ApiError extends Error {
   code: string; status: number; retryAfterMillis: number;
   constructor(code: string, message: string, status = 0, retryAfterMillis = 0) { super(message); this.code = code; this.status = status; this.retryAfterMillis = retryAfterMillis; }
@@ -96,7 +98,8 @@ export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'rem
     async logout() { const sentToken = token,sentFamily=pair?.session.refreshToken?.split('.')[0]; await request('/api/auth/logout', 'POST'); if (token === sentToken || (sentFamily && pair?.session.refreshToken?.split('.')[0]===sentFamily)) clear(); },
     list: (cursor = '', status = 'PUBLISHED') => list(`/api/errands?cursor=${encodeURIComponent(cursor)}&status=${encodeURIComponent(status)}`),
     mine: (role: string, cursor = '') => list(`/api/errands/mine?cursor=${encodeURIComponent(cursor)}&role=${encodeURIComponent(role)}`),
-    credit:()=>request<{score:number;version:string}>('/api/credit'),
+    credit:()=>request<CreditProfile>('/api/credit/self'),
+    creditRanking:()=>request<CreditRank[]>('/api/credit/ranking'),
     action:(id:string,expectedRound:number,action:string,key?:string)=>request<Card|FundResult>(`/api/errands/${encodeURIComponent(id)}/actions`,'POST',{expectedRound,action},true,key),
     async fundResult(key:string){const r=await request<FundResult>(`/api/fund-requests/${encodeURIComponent(key)}`);if(!r||r.requestId!==key||!['PREPARED','COMMITTED','ABORTED','NOT_OBSERVED'].includes(r.state)||!validInteger(r.errandId)||typeof r.errorCode!=='string')invalid();return r;},
     async confirm(id:string,expectedRound:number){return cardValue(await request<Card>(`/api/errands/${encodeURIComponent(id)}/confirm`,'POST',{expectedRound}));},

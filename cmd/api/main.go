@@ -78,7 +78,7 @@ func run(logger *slog.Logger) error {
 	refreshDone := make(chan struct{})
 	go func() { defer close(refreshDone); details.RunRefresh(refreshCtx, db) }()
 	defer func() { stopRefresh(); <-refreshDone }()
-	g := &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: dbName}
+	g := &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: dbName, Limits: errand.NewGrabLimits(cache, dbName)}
 	identity := &auth.Service{DB: db, Redis: cache, Config: identityConfig}
 	hub := notify.NewHub(identity, dbName)
 	hubCtx, stopHub := context.WithCancel(ctx)

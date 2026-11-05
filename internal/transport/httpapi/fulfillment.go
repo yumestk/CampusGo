@@ -1,11 +1,11 @@
 package httpapi
 
 import (
-	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
+	"strconv"
 )
 
 func registerFulfillment(api *gin.RouterGroup, g *errand.Grabber, f *errand.Funds) {
@@ -60,14 +60,29 @@ func registerFulfillment(api *gin.RouterGroup, g *errand.Grabber, f *errand.Fund
 		}
 		ok(c, r)
 	})
-	api.GET("/credit", func(c *gin.Context) {
-		u := c.MustGet("user").(auth.User)
-		var score, version int64
-		err := g.DB.QueryRowContext(c.Request.Context(), "SELECT COALESCE((SELECT score FROM credit_score WHERE user_id=?),60),COALESCE((SELECT version FROM credit_score WHERE user_id=?),0)", u.ID, u.ID).Scan(&score, &version)
+	self := func(c *gin.Context) {
+		p, err := g.CreditSelf(c.Request.Context(), c.MustGet("user").(auth.User))
 		if err != nil {
-			fail(c, fault.Dependency(err))
+			fail(c, err)
 			return
 		}
-		ok(c, gin.H{"score": score, "version": fmt.Sprint(version)})
+		ok(c, p)
+	}
+	api.GET("/credit", self)
+	api.GET("/credit/self", self)
+	api.GET("/credit/ranking", func(c *gin.Context) {
+		u := c.MustGet("user").(auth.User)
+		campus, err := positiveID(c.DefaultQuery("campusId", strconv.FormatInt(u.CampusID, 10)))
+		limit, e := strconv.Atoi(c.DefaultQuery("limit", "20"))
+		if err != nil || e != nil {
+			fail(c, fault.New("INVALID_REQUEST", 400))
+			return
+		}
+		p, err := g.CreditRanking(c.Request.Context(), u, campus, limit)
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		ok(c, p)
 	})
 }

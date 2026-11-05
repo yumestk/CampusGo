@@ -13,9 +13,10 @@ import (
 )
 
 type Error struct {
-	Code   string
-	Status int
-	Cause  error
+	Code             string
+	Status           int
+	Cause            error
+	RetryAfterMillis int64
 }
 
 func (e *Error) Error() string          { return e.Code }

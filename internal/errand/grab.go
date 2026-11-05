@@ -22,6 +22,7 @@ type Grabber struct {
 	Redis     *redis.Client
 	IDs       *idgen.Generator
 	Namespace string // Database name; never mix live and verification projections.
+	Limits    *GrabLimits
 }
 type GrabCommand struct {
 	ErrandID      int64 `json:"errandId,string"`
@@ -61,6 +62,14 @@ func unknown(err error) error {
 	return &fault.Error{Code: "GRAB_RESULT_UNKNOWN", Status: 503, Cause: err}
 }
 func (g *Grabber) Grab(ctx context.Context, u auth.User, key string, c GrabCommand) (GrabResult, error) {
+	if !ValidRequestKey(key) || c.ErrandID <= 0 || c.ExpectedRound < 0 || c.ExpectedRound > 2147483647 {
+		return GrabResult{}, fault.New("INVALID_REQUEST", 400)
+	}
+	release, err := g.Limits.admit(ctx, u.ID, c.ErrandID, false)
+	if err != nil {
+		return GrabResult{}, err
+	}
+	defer release()
 	return g.grab(ctx, u, key, c, nil)
 }
 
@@ -378,6 +387,11 @@ func (g *Grabber) Result(ctx context.Context, u auth.User, key string, id int64)
 	if !ValidRequestKey(key) || id <= 0 {
 		return GrabResult{}, fault.New("INVALID_REQUEST", 400)
 	}
+	release, err := g.Limits.admit(ctx, u.ID, id, true)
+	if err != nil {
+		return GrabResult{}, err
+	}
+	defer release()
 	r, err := scanGrab(g.DB.QueryRowContext(ctx, "SELECT "+grabRequestColumns+" FROM grab_request WHERE campus_id=? AND runner_id=? AND request_key=?", u.CampusID, u.ID, key))
 	if errors.Is(err, sql.ErrNoRows) {
 		return GrabResult{RequestKey: key, ErrandID: id, State: "NOT_OBSERVED", RetryAfterMillis: 1000}, nil
