@@ -32,15 +32,16 @@ export default function GrabPanel({card,user,onResolved}:{card:Card;user:User;on
   finally{if(current===generation.current){lock.current=false;setBusy(false);}}
  };
  const restart=()=>{
-  if(!operation||!result||!['REJECTED','EXPIRED'].includes(result.state))return;
+  if(!operation||!result||!['REJECTED','EXPIRED','SUCCEEDED'].includes(result.state))return;
   try{clearGrab(localStorage,user.id,operation);++generation.current;setOperation(null);setResult(null);setError('');resolved.current();}
   catch(e){setError(e instanceof Error?e.message:'无法新建抢单');}
  };
  if(!operation&&!blocked&&!card.availableActions.includes('GRAB'))return null;
+ const currentReservation=card.status==='LOCKED'&&card.grabberId===user.id&&result?.appliedRound===card.round;
  const failed=result?.state==='REJECTED'||result?.state==='EXPIRED',success=result?.state==='SUCCEEDED';
  return <section className="panel publish-result grab-panel" aria-live="polite">
-  {!operation?<><h2>顺路的话，帮同学一把</h2><p>抢到后进入待确认状态，请留意任务进展。</p></>:success?<><h2>已抢到，等待确认</h2><p>已为你保留这份委托，可在“我的任务”查看进展。</p></>:failed?<><h2>{result.state==='EXPIRED'?'本次抢单请求已过期':'本次未抢到'}</h2><p>{reasons[result.errorCode]||'任务当前不可抢，请刷新后查看。'}</p></>:<><h2>抢单结果待确认</h2><p>{result?.state==='NOT_OBSERVED'?'暂未查到已提交结果，这不代表抢单失败。':'已保留本次请求。正在处理或连接中断时，请查询结果。'}</p></>}
+  {!operation?<><h2>顺路的话，帮同学一把</h2><p>{card.status==='LOCKED'?'当前名额已被抢到，可以尝试登记候选；是否获得递补以任务进展为准。':'抢到后进入待确认状态，请留意任务进展。'}</p></>:success?<><h2>{currentReservation?'已抢到，等待确认':'本次抢单曾成功'}</h2><p>{currentReservation?'已为你保留这份委托，请在期限内确认接单。':'当前归属和状态以任务最新进展为准。'}</p></>:failed?<><h2>{result.state==='EXPIRED'?'本次抢单请求已过期':'本次未抢到'}</h2><p>{reasons[result.errorCode]||'任务当前不可抢，请刷新后查看。'}</p></>:<><h2>抢单结果待确认</h2><p>{result?.state==='NOT_OBSERVED'?'暂未查到已提交结果，这不代表抢单失败。':'已保留本次请求。正在处理或连接中断时，请查询结果。'}</p></>}
   {error&&<div className="banner warn" role="alert">{error}</div>}
-  <div className="funds-actions">{!operation?<button className="btn btn-primary" disabled={busy||blocked} onClick={()=>void run(false)}>立即抢单</button>:success?<a className="btn btn-ghost" href="#/mine">查看我的任务</a>:failed?<button className="btn btn-ghost" disabled={busy||!card.availableActions.includes('GRAB')} onClick={restart}>准备重新抢单</button>:<><button className="btn btn-primary" disabled={busy||blocked} onClick={()=>void run(true)}>查询抢单结果</button><button className="btn btn-ghost" disabled={busy||blocked} onClick={()=>void run(false)}>重试原抢单</button></>}</div>
+  <div className="funds-actions">{!operation?<button className="btn btn-primary" disabled={busy||blocked} onClick={()=>void run(false)}>{card.status==='LOCKED'?'尝试候选登记':'立即抢单'}</button>:success?<><a className="btn btn-ghost" href="#/mine">查看我的任务</a>{card.availableActions.includes('GRAB')&&!currentReservation&&<button className="btn btn-primary" disabled={busy} onClick={restart}>准备重新抢单</button>}</>:failed?<button className="btn btn-ghost" disabled={busy||!card.availableActions.includes('GRAB')} onClick={restart}>准备重新抢单</button>:<><button className="btn btn-primary" disabled={busy||blocked} onClick={()=>void run(true)}>查询抢单结果</button><button className="btn btn-ghost" disabled={busy||blocked} onClick={()=>void run(false)}>重试原抢单</button></>}</div>
  </section>;
 }

@@ -614,7 +614,8 @@ func TestIntegrationD4(t *testing.T) {
 		if count("SELECT COUNT(*) FROM local_message WHERE errand_id=? AND state='DONE' AND retry_count=2", id) != 1 {
 			t.Fatal("resend not done")
 		}
-		deadline := time.Now().Add(20 * time.Second)
+		// Eight broker queues may each spend one long-poll interval empty.
+		deadline := time.Now().Add(90 * time.Second)
 		seen := 0
 		for seen < 2 && time.Now().Before(deadline) {
 			batch, cancel := context.WithTimeout(ctx, 12*time.Second)

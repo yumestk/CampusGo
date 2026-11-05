@@ -644,7 +644,7 @@ func TestIntegrationGrab(t *testing.T) {
 			t.Fatal(r, e)
 		}
 		c, e = q.Detail(ctx, runner, id)
-		if e != nil || c.Status != "LOCKED" || len(c.AvailableActions) != 0 {
+		if e != nil || c.Status != "LOCKED" || len(c.AvailableActions) != 1 || c.AvailableActions[0] != "CONFIRM" || c.ConfirmDeadline == nil {
 			t.Fatal("cache authorized stale grab", c, e)
 		}
 	})

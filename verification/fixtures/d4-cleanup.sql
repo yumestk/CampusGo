@@ -1,0 +1,10 @@
+CREATE TEMPORARY TABLE d4_browser_owned AS SELECT id FROM errand WHERE id BETWEEN 9007199254741401 AND 9007199254741416 AND publisher_id=1001 AND title LIKE 'D4页面验证:%';
+START TRANSACTION;
+DELETE t FROM credit_event t JOIN d4_browser_owned o ON o.id=t.errand_id;
+DELETE t FROM grab_repair_task t JOIN d4_browser_owned o ON o.id=t.errand_id;
+DELETE t FROM local_message t JOIN d4_browser_owned o ON o.id=t.errand_id;
+DELETE t FROM grab_record t JOIN d4_browser_owned o ON o.id=t.errand_id;
+DELETE t FROM grab_request t JOIN d4_browser_owned o ON o.id=t.errand_id;
+DELETE t FROM errand_status_log t JOIN d4_browser_owned o ON o.id=t.errand_id;
+DELETE t FROM errand t JOIN d4_browser_owned o ON o.id=t.id;
+COMMIT;

@@ -1,6 +1,6 @@
 export interface User { id: string; campusId: string; name: string; role: string }
 export interface Session { token: string; userId: string; expiresIn: string }
-export interface Card { id: string; campusId: string; publisherId: string; grabberId: string | null; title: string; type: string; status: string; rewardCents: string; slotTaken: number; slotTotal: number; round: number; role: string; availableActions: string[] }
+export interface Card { id: string; campusId: string; publisherId: string; grabberId: string | null; title: string; type: string; status: string; rewardCents: string; slotTaken: number; slotTotal: number; round: number; confirmDeadline?: string | null; role: string; availableActions: string[] }
 export interface Page { items: Card[]; nextCursor: string }
 export interface StatusChange { time: string; from: string; to: string; round: number; operatorId: string }
 export interface AuthConfig { demoLoginEnabled: boolean; oidcEnabled: boolean; oidcCallbackOrigin: string }
@@ -72,6 +72,7 @@ export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'rem
     async logout() { const sentToken = token; await request('/api/auth/logout', 'POST'); if (token === sentToken) clear(); },
     list: (cursor = '', status = 'PUBLISHED') => list(`/api/errands?cursor=${encodeURIComponent(cursor)}&status=${encodeURIComponent(status)}`),
     mine: (role: string, cursor = '') => list(`/api/errands/mine?cursor=${encodeURIComponent(cursor)}&role=${encodeURIComponent(role)}`),
+    async confirm(id:string,expectedRound:number){return cardValue(await request<Card>(`/api/errands/${encodeURIComponent(id)}/confirm`,'POST',{expectedRound}));},
     async detail(id: string) { return cardValue(await request<Card>(`/api/errands/${encodeURIComponent(id)}`)); },
     timeline: (id: string) => request<StatusChange[]>(`/api/errands/${encodeURIComponent(id)}/timeline`),
     async balance() { const b = await request<Balance>('/api/wallet'); if (!b || ![b.availableCents,b.frozenCents,b.version].every(validInteger)) invalid(); return b; },
