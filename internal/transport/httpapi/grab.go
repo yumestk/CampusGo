@@ -8,6 +8,30 @@ import (
 )
 
 func registerGrab(api *gin.RouterGroup, g *errand.Grabber) {
+	api.POST("/errands/:id/confirm", func(c *gin.Context) {
+		id, err := positiveID(c.Param("id"))
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		var body struct {
+			ExpectedRound *int `json:"expectedRound"`
+		}
+		if err = decode(c, &body); err != nil {
+			fail(c, err)
+			return
+		}
+		if body.ExpectedRound == nil {
+			fail(c, fault.New("INVALID_REQUEST", 400))
+			return
+		}
+		card, err := g.Confirm(c.Request.Context(), c.MustGet("user").(auth.User), id, *body.ExpectedRound)
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		ok(c, card)
+	})
 	api.POST("/errands/:id/grab", func(c *gin.Context) {
 		id, err := positiveID(c.Param("id"))
 		if err != nil {

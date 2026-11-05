@@ -14,21 +14,22 @@ import (
 )
 
 type Card struct {
-	ID               int64     `json:"id,string"`
-	CampusID         int64     `json:"campusId,string"`
-	PublisherID      int64     `json:"publisherId,string"`
-	GrabberID        *int64    `json:"grabberId,string"`
-	Type             string    `json:"type"`
-	Title            string    `json:"title"`
-	RewardCents      int64     `json:"rewardCents,string"`
-	SlotTotal        int       `json:"slotTotal"`
-	SlotTaken        int       `json:"slotTaken"`
-	Status           string    `json:"status"`
-	Round            int       `json:"round"`
-	Version          int64     `json:"version,string"`
-	Role             string    `json:"role"`
-	AvailableActions []string  `json:"availableActions"`
-	CreatedAt        time.Time `json:"-"`
+	ID               int64      `json:"id,string"`
+	CampusID         int64      `json:"campusId,string"`
+	PublisherID      int64      `json:"publisherId,string"`
+	GrabberID        *int64     `json:"grabberId,string"`
+	Type             string     `json:"type"`
+	Title            string     `json:"title"`
+	RewardCents      int64      `json:"rewardCents,string"`
+	SlotTotal        int        `json:"slotTotal"`
+	SlotTaken        int        `json:"slotTaken"`
+	Status           string     `json:"status"`
+	Round            int        `json:"round"`
+	Version          int64      `json:"version,string"`
+	Role             string     `json:"role"`
+	AvailableActions []string   `json:"availableActions"`
+	ConfirmDeadline  *time.Time `json:"confirmDeadline"`
+	CreatedAt        time.Time  `json:"-"`
 }
 type Page struct {
 	Items      []Card `json:"items"`
@@ -46,7 +47,7 @@ type Query struct {
 	Cache *DetailCache
 }
 
-const columns = "id,campus_id,publisher_id,grabber_id,type,title,reward_amount,slot_total,slot_taken,status,round,version,created_at"
+const columns = "id,campus_id,publisher_id,grabber_id,type,title,reward_amount,slot_total,slot_taken,status,round,version,created_at,confirm_deadline"
 
 // The original composite cursor is stable when IDs and commit order differ.
 func ParseCursor(cursor string) (time.Time, int64, error) {
@@ -94,8 +95,11 @@ func (o ListOptions) Validate(viewer auth.User) error {
 }
 func decorate(c *Card, viewer auth.User) {
 	c.AvailableActions = []string{}
-	if c.CampusID == viewer.CampusID && c.Status == "PUBLISHED" && c.PublisherID != viewer.ID && (viewer.Role == "STUDENT" || viewer.Role == "ARBITRATOR") {
+	if c.CampusID == viewer.CampusID && (c.Status == "PUBLISHED" || (c.Status == "LOCKED" && (c.GrabberID == nil || *c.GrabberID != viewer.ID))) && c.PublisherID != viewer.ID && (viewer.Role == "STUDENT" || viewer.Role == "ARBITRATOR") {
 		c.AvailableActions = append(c.AvailableActions, "GRAB")
+	}
+	if c.CampusID == viewer.CampusID && c.Status == "LOCKED" && c.GrabberID != nil && *c.GrabberID == viewer.ID {
+		c.AvailableActions = append(c.AvailableActions, "CONFIRM")
 	}
 	c.Role = "VIEWER"
 	if c.GrabberID != nil && *c.GrabberID == viewer.ID {
@@ -116,7 +120,7 @@ type scanner interface{ Scan(...any) error }
 
 func scan(row scanner) (Card, error) {
 	var c Card
-	err := row.Scan(&c.ID, &c.CampusID, &c.PublisherID, &c.GrabberID, &c.Type, &c.Title, &c.RewardCents, &c.SlotTotal, &c.SlotTaken, &c.Status, &c.Round, &c.Version, &c.CreatedAt)
+	err := row.Scan(&c.ID, &c.CampusID, &c.PublisherID, &c.GrabberID, &c.Type, &c.Title, &c.RewardCents, &c.SlotTotal, &c.SlotTaken, &c.Status, &c.Round, &c.Version, &c.CreatedAt, &c.ConfirmDeadline)
 	return c, err
 }
 func (q Query) List(ctx context.Context, viewer auth.User, o ListOptions) (Page, error) {

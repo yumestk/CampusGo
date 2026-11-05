@@ -107,6 +107,9 @@ services:
         sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-d0-transaction -a +message.type=TRANSACTION
         sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-d0-delay -a +message.type=DELAY
         sh mqadmin updateSubGroup -n rmqnamesrv:9876 -c CampusGoD0 -g campusgo-d0-tx-consumer
+        sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-confirm-timeout -a +message.type=DELAY
+        sh mqadmin updateSubGroup -n rmqnamesrv:9876 -c CampusGoD0 -g campusgo-timeout-campusgo
+        sh mqadmin updateSubGroup -n rmqnamesrv:9876 -c CampusGoD0 -g campusgo-timeout-campusgo_verification
         sh mqadmin topicList -n rmqnamesrv:9876 | grep -Fx campusgo-d0-transaction
         sh mqadmin topicList -n rmqnamesrv:9876 | grep -Fx campusgo-d0-delay
     environment:

@@ -137,7 +137,7 @@ func TestIntegrationD3HTTP(t *testing.T) {
 	if w := send("GET", resultPath, "", a.Token); w.Code != 200 || !strings.Contains(w.Body.String(), "SUCCEEDED") {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if w := send("GET", fmt.Sprintf("/api/errands/%d", id), "", a.Token); w.Code != 200 || !strings.Contains(w.Body.String(), `"grabberId":"2001"`) || !strings.Contains(w.Body.String(), `"availableActions":[]`) {
+	if w := send("GET", fmt.Sprintf("/api/errands/%d", id), "", a.Token); w.Code != 200 || !strings.Contains(w.Body.String(), `"grabberId":"2001"`) || !strings.Contains(w.Body.String(), `"availableActions":["CONFIRM"]`) {
 		t.Fatal("authoritative detail", w.Code, w.Body.String())
 	}
 }

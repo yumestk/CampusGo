@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,9 +16,11 @@ import (
 	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/config"
 	"github.com/yumestk/CampusGo/internal/platform/database"
+	"github.com/yumestk/CampusGo/internal/platform/idgen"
 	"github.com/yumestk/CampusGo/internal/platform/rediscache"
 	"github.com/yumestk/CampusGo/internal/platform/server"
 	"github.com/yumestk/CampusGo/internal/platform/telemetry"
+	"github.com/yumestk/CampusGo/internal/timeoutmq"
 )
 
 func main() {
@@ -52,17 +56,26 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	defer cache.Close()
-	g := &errand.Grabber{DB: db, Redis: cache, Namespace: name}
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		g.RunRecovery(ctx, func(err error) { logger.Error("grab recovery failed", "cause_type", fmt.Sprintf("%T", err)) })
-	}()
+	workerID, err := strconv.ParseInt(os.Getenv("CAMPUSGO_WORKER_ID_WORKER"), 10, 64)
+	if err != nil {
+		return fmt.Errorf("CAMPUSGO_WORKER_ID_WORKER must be an explicit unique ID")
+	}
+	ids, err := idgen.New(workerID)
+	if err != nil {
+		return err
+	}
+	g := &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: name}
+	var workers sync.WaitGroup
+	onError := func(err error) { logger.Error("worker operation failed", "cause_type", fmt.Sprintf("%T", err)) }
+	for _, run := range []func(){func() { g.RunRecovery(ctx, onError) }, func() { g.RunTimeoutScan(ctx, onError) }, func() { timeoutmq.Run(ctx, g, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), onError) }} {
+		workers.Add(1)
+		go func() { defer workers.Done(); run() }()
+	}
 	router := http.NewServeMux()
 	router.HandleFunc("GET /livez", server.Liveness("worker"))
 	router.Handle("GET /metrics", promhttp.HandlerFor(telemetry.NewRegistry("worker"), promhttp.HandlerOpts{}))
 	err = server.Run(ctx, cfg, router, logger)
 	stop()
-	<-done
+	workers.Wait()
 	return err
 }

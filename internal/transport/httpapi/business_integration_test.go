@@ -101,7 +101,7 @@ func TestIntegrationHTTPIdentityAndQueries(t *testing.T) {
 		if w.Code != tc.status || !strings.Contains(w.Body.String(), tc.contains) {
 			t.Fatalf("%s: status=%d body=%s", tc.path, w.Code, w.Body.String())
 		}
-		for _, action := range []string{"CONFIRM", "PICKUP", "DELIVER", "SETTLE"} {
+		for _, action := range []string{"PICKUP", "DELIVER", "SETTLE"} {
 			if strings.Contains(w.Body.String(), `"`+action+`"`) {
 				t.Fatal("unimplemented action exposed")
 			}

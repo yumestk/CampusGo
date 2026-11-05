@@ -334,6 +334,9 @@ func (g *Grabber) finishLocked(ctx context.Context, tx *sql.Tx, r grabRequest, s
 		return r.result(), unknown(err)
 	}
 	r.State, r.Code = state, code
+	if state == "REJECTED" && (code == "SLOT_FULL" || code == "GRAB_CONFLICT" || code == "STALE_VERSION") {
+		_ = g.offerCandidate(ctx, r)
+	}
 	return r.result(), nil
 }
 func (g *Grabber) finishGrab(ctx context.Context, r grabRequest, state, code string) (GrabResult, error) {

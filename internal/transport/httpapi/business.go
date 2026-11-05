@@ -34,7 +34,7 @@ func fail(c *gin.Context, err error) {
 		f = &fault.Error{Code: "INTERNAL_ERROR", Status: 500, Cause: err}
 	}
 	messages := map[string]string{"UNAUTHORIZED": "未登录或会话已过期", "FORBIDDEN": "没有访问权限", "IDENTITY_NOT_BOUND": "身份尚未绑定校园用户", "INVALID_REQUEST": "请求参数不合法", "DEPENDENCY_UNAVAILABLE": "依赖暂不可用，请稍后重试", "ERRAND_NOT_FOUND": "任务不存在", "INTERNAL_ERROR": "系统内部错误", "NOT_FOUND": "接口不存在", "METHOD_NOT_ALLOWED": "请求方法不支持", "OIDC_DISABLED": "未启用统一身份登录"}
-	for code, message := range map[string]string{"ACCOUNT_NOT_FOUND": "钱包账户不存在", "ESCROW_NOT_FOUND": "托管记录不存在或无权查看", "INSUFFICIENT_BALANCE": "可用余额不足", "BALANCE_LIMIT": "账户金额或记账序号已达上限", "IDEMPOTENCY_CONFLICT": "请求号已用于不同的操作内容", "GRAB_RESULT_UNKNOWN": "抢单结果暂未确认，请查询结果或使用原请求号重试", "PUBLISH_RESULT_UNKNOWN": "发布结果暂未确认，请查询结果或使用原请求号重试"} {
+	for code, message := range map[string]string{"CONFIRM_RESULT_UNKNOWN": "确认结果暂不确定，请刷新进度或重试同一轮确认", "CONFIRM_DEADLINE_PASSED": "确认期限已过，请刷新任务进展", "NOT_CURRENT_GRABBER": "当前任务已不属于你", "STALE_VERSION": "任务轮次或状态已变化，请刷新", "TOO_MANY_ONGOING": "在途任务已达 5 单上限", "CREDIT_TOO_LOW": "信用分未达到要求", "INVALID_STATUS": "当前状态不能执行此操作", "ACCOUNT_NOT_FOUND": "钱包账户不存在", "ESCROW_NOT_FOUND": "托管记录不存在或无权查看", "INSUFFICIENT_BALANCE": "可用余额不足", "BALANCE_LIMIT": "账户金额或记账序号已达上限", "IDEMPOTENCY_CONFLICT": "请求号已用于不同的操作内容", "GRAB_RESULT_UNKNOWN": "抢单结果暂未确认，请查询结果或使用原请求号重试", "PUBLISH_RESULT_UNKNOWN": "发布结果暂未确认，请查询结果或使用原请求号重试"} {
 		messages[code] = message
 	}
 	var data any
