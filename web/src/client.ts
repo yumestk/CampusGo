@@ -52,8 +52,10 @@ export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'rem
     if(current.session.token!==token){token=current.session.token;pair=current;return current.session;}
     const old=token;current.pending=current.pending||crypto.randomUUID();storage.setItem(jwtKey,JSON.stringify(current));pair=current;
     let response:Response;try{response=await fetcher('/api/auth/refresh',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':current.pending},body:JSON.stringify({refreshToken:current.session.refreshToken}),cache:'no-store'});}catch{throw new ApiError('NETWORK','续期结果待确认，请重试；原刷新请求已保留',0,1000);}
-    const value=await response.json();if(!response.ok||value.code!=='OK'){if(response.status===401&&token===old)clear();throw new ApiError(value.code||'REFRESH_FAILED',value.message||'登录续期失败，请重试',response.status,1000);}
-    if(token!==old)throw new ApiError('SESSION_CHANGED','登录状态已变化，请刷新页面');
+    let value;try{value=await response.json();}catch{throw new ApiError('INVALID_RESPONSE','续期结果待确认，请使用原请求重试',response.status,1000);}
+    if(typeof value?.code!=='string')throw new ApiError('INVALID_RESPONSE','续期结果待确认，请使用原请求重试',response.status,1000);
+    if(!response.ok||value.code!=='OK'){if(response.status===401&&token===old)clear();throw new ApiError(value.code||'REFRESH_FAILED',value.message||'登录续期失败，请重试',response.status,1000);}
+    if(token!==old||readJWT()?.session.token!==old)throw new ApiError('SESSION_CHANGED','登录状态已变化，请刷新页面');
     acceptSession(value.data);return value.data as Session;
    };
    refreshing=(async()=>{if(typeof navigator!=='undefined'&&navigator.locks)return await navigator.locks.request('campusgo-refresh',run);return await run();})().finally(()=>{refreshing=null;});return refreshing;

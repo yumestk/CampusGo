@@ -178,7 +178,7 @@ func TestIntegrationJWTLifecycle(t *testing.T) {
 		a := login()
 		c, _ := s.parseJWT(a.Token, false)
 		before, _ := s.Redis.PTTL(ctx, s.familyKey(c.Family)).Result()
-		_, e := s.Refresh(ctx, a.RefreshToken, uuid.NewString())
+		out, e := s.Refresh(ctx, a.RefreshToken, uuid.NewString())
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -188,7 +188,7 @@ func TestIntegrationJWTLifecycle(t *testing.T) {
 		}
 		m, _ := s.Redis.HGetAll(ctx, s.familyKey(c.Family)).Result()
 		raw, _ := json.Marshal(m)
-		if strings.Contains(string(raw), a.RefreshToken) || strings.Contains(string(raw), "eyJ") {
+		if strings.Contains(string(raw), a.RefreshToken) || strings.Contains(string(raw), out.RefreshToken) || strings.Contains(string(raw), out.Token) {
 			t.Fatal("plaintext credentials stored")
 		}
 	})
