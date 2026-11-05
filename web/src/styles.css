@@ -330,3 +330,10 @@ input::placeholder, textarea::placeholder { color: #707070; }
   .identity-btn { padding: 14px 12px; gap: 10px; }
   .identity-icon { width: 44px; height: 48px; border-radius: 12px; }
 }
+.notice-list {padding: 8px 24px;}
+.notice-item {display:flex;align-items:center;justify-content:space-between;gap:20px;padding:24px 0;border-bottom:1px solid #e8ebe6;}
+.notice-item:last-child {border-bottom:0;}
+.notice-item p {margin:10px 0;line-height:1.7;}
+.notice-item time {font-size:12px;color:#66716b;}
+@media(max-width:700px){.notice-item{align-items:flex-start;flex-direction:column;}.topbar-right>span{display:none;}}
+@media(max-width:700px){.topbar{height:auto;min-height:66px;flex-wrap:wrap;padding-top:10px;padding-bottom:10px;}.topbar-right{flex-wrap:wrap;gap:6px;}.topbar .btn{padding:7px 9px;font-size:12px;}}

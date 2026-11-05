@@ -143,7 +143,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Explicit origin equality also rejects hostile same-host ports. Credentials
 	// are sent in the first WS frame (WSS with HTTPS), never in URLs or logs.
 	if h.Auth.Config.FrontendOrigin == "" || r.Header.Get("Origin") != h.Auth.Config.FrontendOrigin || r.URL.RawQuery != "" {
-		http.Error(w, "forbidden", 403)
+		rejectUpgrade(w, 403, "FORBIDDEN", "没有访问权限")
 		return
 	}
 	h.mu.Lock()
@@ -154,7 +154,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 	if !ready {
-		http.Error(w, "realtime unavailable", 503)
+		rejectUpgrade(w, 503, "DEPENDENCY_UNAVAILABLE", "实时服务暂不可用，请稍后重试")
 		return
 	}
 	defer func() { h.mu.Lock(); h.total--; h.mu.Unlock(); h.handlers.Done() }()
@@ -277,6 +277,16 @@ func writeEvent(ctx context.Context, ws *websocket.Conn, e Event) error {
 }
 func (h *Hub) facts(ctx context.Context, user int64) (string, error) {
 	var logID, creditVersion, noticeID int64
-	err := h.Auth.DB.QueryRowContext(ctx, `SELECT COALESCE((SELECT MAX(l.id) FROM errand_status_log l JOIN errand e ON e.id=l.errand_id WHERE e.publisher_id=? OR e.grabber_id=?),0),COALESCE((SELECT version FROM credit_score WHERE user_id=?),0),COALESCE((SELECT MAX(id) FROM notification WHERE user_id=?),0)`, user, user, user, user).Scan(&logID, &creditVersion, &noticeID)
+	err := h.Auth.DB.QueryRowContext(ctx, `SELECT COALESCE((SELECT MAX(l.id) FROM errand_status_log l JOIN errand e ON e.id=l.errand_id AND e.campus_id=l.campus_id WHERE e.publisher_id=? OR e.grabber_id=?),0),COALESCE((SELECT version FROM credit_score WHERE user_id=?),0),COALESCE((SELECT MAX(id) FROM notification WHERE user_id=?),0)`, user, user, user, user).Scan(&logID, &creditVersion, &noticeID)
 	return fmt.Sprintf("%d:%d:%d", logID, creditVersion, noticeID), err
+}
+
+func rejectUpgrade(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	if status == 503 {
+		w.Header().Set("Retry-After", "1")
+	}
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"code": code, "message": message, "data": nil})
 }

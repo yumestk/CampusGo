@@ -18,6 +18,8 @@ export default function Wallet(){
   finally{if(current===generation.current){lock.current=false;setBusy(false);}}
  };
  useEffect(()=>{lock.current=false;void load();return()=>{++generation.current;};},[]);
+ const latestLoad=useRef(load);latestLoad.current=load;
+ useEffect(()=>{const refresh=()=>void latestLoad.current();window.addEventListener('campusgo:changed',refresh);return()=>window.removeEventListener('campusgo:changed',refresh);},[]);
  return <div className="funds-page"><div className="page-head"><div><span className="eyebrow">EVERY CENT COUNTS</span><h1>我的钱包<span>.</span></h1><p>查看可用余额与每一笔资金记录。</p></div><button className="btn btn-ghost" onClick={()=>void load()} disabled={busy}><Icon name="refresh"/>刷新钱包</button></div>
  {error&&<div className="banner warn" role="alert">{error}<button className="text-button" disabled={busy} onClick={()=>void load()}>重试</button></div>}
  <section className="wallet-overview"><div className="wallet-available"><Icon name="wallet" size={28}/><span>可用余额</span><strong data-testid="wallet-available">{balance?money(balance.availableCents):'—'}</strong><a className="btn" href="#/publish">发布一份委托<Icon name="arrow-right"/></a></div><div className="panel wallet-explain"><h2>每笔赏金，都有去向</h2><p>发布后的赏金转入平台托管账户，可在对应任务详情中查看。</p><p>当前信用：{credit??'暂不可用'} 分。基准 60 分，按最近 30 天信用事件定期校准。</p><p className="funds-muted">预授权冻结余额：{balance?money(balance.frozenCents):'—'}</p></div></section>

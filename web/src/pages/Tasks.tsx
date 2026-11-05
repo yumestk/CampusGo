@@ -17,6 +17,8 @@ export default function Tasks({ mine }: { mine: boolean }) {
     finally { if(current === version.current) { setLoading(false); inFlight.current = false; } }
   };
   useEffect(() => { inFlight.current = false; setItems([]); setLoaded(false); setCursor(''); void load(); return () => { ++version.current; }; },[mine,role]);
+ const latestLoad=useRef(load);latestLoad.current=load;
+ useEffect(()=>{const refresh=()=>void latestLoad.current();window.addEventListener('campusgo:changed',refresh);return()=>window.removeEventListener('campusgo:changed',refresh);},[]);
   const filtered = items.filter(item => `${item.title} ${item.id}`.includes(query.trim()));
   return <div className="square-page"><div className="page-head"><div><span className="eyebrow">CAMPUS LIFE, MADE EASIER</span><h1>{mine ? '我的任务' : '任务广场'}<span className="heading-dot">.</span></h1><p>{mine ? '查看属于你的委托与接单记录。' : '发现校园里的小委托，让每一段顺路都有价值。'}</p></div><button className="btn btn-ghost" onClick={() => void load()} disabled={loading}><Icon name="refresh" size={16}/>刷新任务</button></div>
     {!mine && <section className="square-hero"><div className="hero-copy"><span className="soft-label">校园互助，刚好顺路</span><h2>刚好顺路，<br/><em>刚好帮你。</em></h2><p>一份热饭、一个包裹、一件小事。<br/>在校园，让互相帮助变得简单。</p></div><CampusArt/></section>}

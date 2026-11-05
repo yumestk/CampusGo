@@ -117,3 +117,24 @@ jobs:
           CAMPUSGO_D6_API_HOST: 0.0.0.0
       - if: always()
         run: docker compose --env-file .env -f deploy/local/compose.yaml --profile gateway --profile identity down -v
+
+  notifications:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache: true
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '24.22.1'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: make env build
+      - run: ./scripts/with-local-env.sh ./verification/d7.sh
+        env:
+          CAMPUSGO_D7_API_HOST: 0.0.0.0
+      - if: always()
+        run: docker compose --env-file .env -f deploy/local/compose.yaml --profile gateway --profile identity down -v

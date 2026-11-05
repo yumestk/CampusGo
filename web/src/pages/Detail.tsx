@@ -22,6 +22,8 @@ export default function Detail({ id,user }: { id: string;user:User }) {
     setLoading(false); lock.current = false;
   };
   useEffect(() => { lock.current = false; void load(); return () => { ++version.current; }; },[id]);
+ const latestLoad=useRef(load);latestLoad.current=load;
+ useEffect(()=>{const refresh=()=>void latestLoad.current();window.addEventListener('campusgo:changed',refresh);return()=>window.removeEventListener('campusgo:changed',refresh);},[]);
   return <div className="task-detail-page"><div className="task-detail-toolbar"><a className="task-back-link" href="#/square"><Icon name="arrow-left" size={16}/>返回任务广场</a><button className="btn btn-ghost" disabled={loading} onClick={() => void load()}>刷新进度</button></div>
     {error && <div className="banner warn" role="alert">{error}<button className="text-button" onClick={() => void load()} disabled={loading}>重试</button></div>}
     {!card && <section className="panel empty-state" role="status">{loading ? '正在打开这份任务…' : '暂时无法打开任务'}</section>}
