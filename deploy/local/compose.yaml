@@ -107,6 +107,10 @@ services:
         sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-d0-transaction -a +message.type=TRANSACTION
         sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-d0-delay -a +message.type=DELAY
         sh mqadmin updateSubGroup -n rmqnamesrv:9876 -c CampusGoD0 -g campusgo-d0-tx-consumer
+        sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-funds -a +message.type=TRANSACTION
+        sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-auto-settle -a +message.type=DELAY
+        sh mqadmin updateSubGroup -n rmqnamesrv:9876 -c CampusGoD0 -g campusgo-funds-campusgo
+        sh mqadmin updateSubGroup -n rmqnamesrv:9876 -c CampusGoD0 -g campusgo-funds-campusgo_verification
         sh mqadmin updateTopic -n rmqnamesrv:9876 -c CampusGoD0 -t campusgo-confirm-timeout -a +message.type=DELAY
         sh mqadmin updateSubGroup -n rmqnamesrv:9876 -c CampusGoD0 -g campusgo-timeout-campusgo
         sh mqadmin updateSubGroup -n rmqnamesrv:9876 -c CampusGoD0 -g campusgo-timeout-campusgo_verification

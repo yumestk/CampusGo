@@ -20,6 +20,7 @@ func main() {
 }
 func run() error {
 	name := flag.String("database", "campusgo", "database to reconcile")
+	inspect := flag.Int64("errand", 0, "inspect durable facts for a specific task without modifying balances")
 	flag.Parse()
 	if *name != "campusgo" && *name != "campusgo_verification" {
 		return fmt.Errorf("invalid database")
@@ -31,6 +32,13 @@ func run() error {
 		return err
 	}
 	defer db.Close()
+	if *inspect != 0 {
+		facts, e := (wallet.Query{DB: db}).Inspect(ctx, *inspect)
+		if e != nil {
+			return e
+		}
+		return json.NewEncoder(os.Stdout).Encode(facts)
+	}
 	checks, err := (wallet.Query{DB: db}).Reconcile(ctx)
 	if err != nil {
 		return err

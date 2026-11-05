@@ -15,6 +15,7 @@ import (
 )
 
 type TimeoutMessage struct {
+	Topic        string    `json:"topic"`
 	ID           int64     `json:"id,string"`
 	CampusID     int64     `json:"campusId,string"`
 	ErrandID     int64     `json:"errandId,string"`
@@ -29,11 +30,11 @@ type TimeoutMessage struct {
 	ReplayReason string    `json:"replayReason"`
 }
 
-const messageColumns = "id,campus_id,errand_id,msg_key,payload,deliver_at,state,retry_count,replay_count,COALESCE(worker_token,''),COALESCE(last_error,''),COALESCE(last_replay_reason,'')"
+const messageColumns = "topic,id,campus_id,errand_id,msg_key,payload,deliver_at,state,retry_count,replay_count,COALESCE(worker_token,''),COALESCE(last_error,''),COALESCE(last_replay_reason,'')"
 
 func scanMessage(row scanner) (TimeoutMessage, error) {
 	var m TimeoutMessage
-	err := row.Scan(&m.ID, &m.CampusID, &m.ErrandID, &m.Key, &m.Payload, &m.DeliverAt, &m.State, &m.Attempts, &m.ReplayCount, &m.Token, &m.LastError, &m.ReplayReason)
+	err := row.Scan(&m.Topic, &m.ID, &m.CampusID, &m.ErrandID, &m.Key, &m.Payload, &m.DeliverAt, &m.State, &m.Attempts, &m.ReplayCount, &m.Token, &m.LastError, &m.ReplayReason)
 	return m, err
 }
 func (g *Grabber) ClaimMessages(ctx context.Context, limit int) ([]TimeoutMessage, error) {
@@ -45,7 +46,7 @@ func (g *Grabber) ClaimMessages(ctx context.Context, limit int) ([]TimeoutMessag
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, "SELECT "+messageColumns+" FROM local_message WHERE topic='errand-confirm-timeout' AND ((state='PENDING' AND next_run_at<=CURRENT_TIMESTAMP(3)) OR (state='RUNNING' AND locked_until<=CURRENT_TIMESTAMP(3))) ORDER BY next_run_at,id LIMIT ? FOR UPDATE SKIP LOCKED", limit)
+	rows, err := tx.QueryContext(ctx, "SELECT "+messageColumns+" FROM local_message WHERE topic IN ('errand-confirm-timeout','errand-auto-settle') AND ((state='PENDING' AND next_run_at<=CURRENT_TIMESTAMP(3)) OR (state='RUNNING' AND locked_until<=CURRENT_TIMESTAMP(3))) ORDER BY next_run_at,id LIMIT ? FOR UPDATE SKIP LOCKED", limit)
 	if err != nil {
 		return nil, err
 	}

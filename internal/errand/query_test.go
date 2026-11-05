@@ -21,8 +21,8 @@ func TestQueryVisibility(t *testing.T) {
 		t.Fatal("cross-campus visibility")
 	}
 	decorate(&draft, owner)
-	if draft.Role != "PUBLISHER" || draft.AvailableActions == nil || len(draft.AvailableActions) != 0 {
-		t.Fatal("unimplemented actions advertised")
+	if draft.Role != "PUBLISHER" || draft.AvailableActions == nil || len(draft.AvailableActions) != 1 || draft.AvailableActions[0] != "CANCEL_DRAFT" {
+		t.Fatal("draft cancellation action missing")
 	}
 	for _, o := range []ListOptions{{CampusID: 2, Status: "PUBLISHED", Size: 20}, {CampusID: 1, Status: "PUBLISHED", Size: 101}, {CampusID: 1, Status: "anything", Size: 20}, {CampusID: 1, Role: "ARBITRATOR", Size: 20}, {CampusID: 1, Status: "PUBLISHED", Size: 20, Page: 1, Before: 9}} {
 		if o.Validate(owner) == nil {

@@ -29,6 +29,7 @@ type Card struct {
 	Role             string     `json:"role"`
 	AvailableActions []string   `json:"availableActions"`
 	ConfirmDeadline  *time.Time `json:"confirmDeadline"`
+	DeliveredAt      *time.Time `json:"deliveredAt"`
 	CreatedAt        time.Time  `json:"-"`
 }
 type Page struct {
@@ -47,7 +48,7 @@ type Query struct {
 	Cache *DetailCache
 }
 
-const columns = "id,campus_id,publisher_id,grabber_id,type,title,reward_amount,slot_total,slot_taken,status,round,version,created_at,confirm_deadline"
+const columns = "id,campus_id,publisher_id,grabber_id,type,title,reward_amount,slot_total,slot_taken,status,round,version,created_at,confirm_deadline,delivered_at"
 
 // The original composite cursor is stable when IDs and commit order differ.
 func ParseCursor(cursor string) (time.Time, int64, error) {
@@ -101,6 +102,32 @@ func decorate(c *Card, viewer auth.User) {
 	if c.CampusID == viewer.CampusID && c.Status == "LOCKED" && c.GrabberID != nil && *c.GrabberID == viewer.ID {
 		c.AvailableActions = append(c.AvailableActions, "CONFIRM")
 	}
+	if c.CampusID == viewer.CampusID {
+		runner := c.GrabberID != nil && *c.GrabberID == viewer.ID
+		if runner && c.Status == "ACCEPTED" {
+			c.AvailableActions = append(c.AvailableActions, "PICK_UP")
+		}
+		if runner && c.Status == "PICKED_UP" {
+			c.AvailableActions = append(c.AvailableActions, "DELIVER")
+		}
+		if (runner || c.PublisherID == viewer.ID) && (c.Status == "ACCEPTED" || c.Status == "PICKED_UP" || c.Status == "DELIVERED") {
+			c.AvailableActions = append(c.AvailableActions, "DISPUTE")
+		}
+		if c.PublisherID == viewer.ID {
+			if c.Status == "DELIVERED" {
+				c.AvailableActions = append(c.AvailableActions, "SETTLE")
+			}
+			if c.Status == "DRAFT" {
+				c.AvailableActions = append(c.AvailableActions, "CANCEL_DRAFT")
+			}
+			if c.Status == "PUBLISHED" {
+				c.AvailableActions = append(c.AvailableActions, "CANCEL")
+			}
+		}
+		if viewer.Role == "ARBITRATOR" && c.Status == "DISPUTED" {
+			c.AvailableActions = append(c.AvailableActions, "ARBITRATE_RUNNER", "ARBITRATE_PUBLISHER")
+		}
+	}
 	c.Role = "VIEWER"
 	if c.GrabberID != nil && *c.GrabberID == viewer.ID {
 		c.Role = "CURRENT_RUNNER"
@@ -120,7 +147,7 @@ type scanner interface{ Scan(...any) error }
 
 func scan(row scanner) (Card, error) {
 	var c Card
-	err := row.Scan(&c.ID, &c.CampusID, &c.PublisherID, &c.GrabberID, &c.Type, &c.Title, &c.RewardCents, &c.SlotTotal, &c.SlotTaken, &c.Status, &c.Round, &c.Version, &c.CreatedAt, &c.ConfirmDeadline)
+	err := row.Scan(&c.ID, &c.CampusID, &c.PublisherID, &c.GrabberID, &c.Type, &c.Title, &c.RewardCents, &c.SlotTotal, &c.SlotTaken, &c.Status, &c.Round, &c.Version, &c.CreatedAt, &c.ConfirmDeadline, &c.DeliveredAt)
 	return c, err
 }
 func (q Query) List(ctx context.Context, viewer auth.User, o ListOptions) (Page, error) {

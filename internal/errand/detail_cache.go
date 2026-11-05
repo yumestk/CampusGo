@@ -140,7 +140,7 @@ func (q Query) cachedDetail(ctx context.Context, u auth.User, id int64) (Card, e
 	// API requests; the metrics expose this deliberate consistency tradeoff.
 	var live Card
 	cache.count("sql_authority_query")
-	err := q.DB.QueryRowContext(ctx, "SELECT id,campus_id,publisher_id,grabber_id,slot_total,slot_taken,status,round,version,confirm_deadline FROM errand WHERE id=?", id).Scan(&live.ID, &live.CampusID, &live.PublisherID, &live.GrabberID, &live.SlotTotal, &live.SlotTaken, &live.Status, &live.Round, &live.Version, &live.ConfirmDeadline)
+	err := q.DB.QueryRowContext(ctx, "SELECT id,campus_id,publisher_id,grabber_id,slot_total,slot_taken,status,round,version,confirm_deadline,delivered_at FROM errand WHERE id=?", id).Scan(&live.ID, &live.CampusID, &live.PublisherID, &live.GrabberID, &live.SlotTotal, &live.SlotTaken, &live.Status, &live.Round, &live.Version, &live.ConfirmDeadline, &live.DeliveredAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		if decoded && cached.Empty && cached.Exp > time.Now().UnixMilli() {
 			cache.count("negative_hint_hit")
@@ -165,6 +165,7 @@ func (q Query) cachedDetail(ctx context.Context, u auth.User, id int64) (Card, e
 	if valid {
 		// Both fresh hits and stale-while-revalidate responses use SQL authority fields.
 		cached.Data.ConfirmDeadline = live.ConfirmDeadline
+		cached.Data.DeliveredAt = live.DeliveredAt
 		cached.Data.GrabberID = live.GrabberID
 		cached.Data.Status = live.Status
 		cached.Data.Round = live.Round

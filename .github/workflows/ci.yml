@@ -82,3 +82,17 @@ jobs:
       - run: ./scripts/with-local-env.sh ./verification/d4-backend.sh
       - if: always()
         run: docker compose --env-file .env -f deploy/local/compose.yaml down -v
+
+  fulfillment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version: '1.27.1'
+          cache: true
+      - run: make env build
+      - run: ./scripts/with-local-env.sh ./verification/d5-backend.sh
+      - if: always()
+        run: docker compose --env-file .env -f deploy/local/compose.yaml down -v

@@ -251,17 +251,7 @@ func (g *Grabber) timeoutStep(ctx context.Context, c Card, next *Candidate, hook
 	} else {
 		_, err = tx.ExecContext(ctx, "UPDATE errand SET status='PUBLISHED',grabber_id=NULL,slot_taken=0,round=round+1,version=version+1,locked_at=NULL,confirm_deadline=NULL WHERE id=?", c.ID)
 		if err == nil && c.GrabberID != nil {
-			// Stronger than the original best-effort credit side effect: unique event and
-			// score change commit with the re-pool, so a crash cannot lose or double it.
-			var result sql.Result
-			result, err = tx.ExecContext(ctx, "INSERT INTO credit_event (user_id,errand_id,round,kind,delta) VALUES (?,?,?,'GRAB_TIMEOUT_REVERT',-5) ON DUPLICATE KEY UPDATE id=id", *c.GrabberID, c.ID, c.Round)
-			if err == nil {
-				var n int64
-				n, err = result.RowsAffected()
-				if err == nil && n == 1 {
-					_, err = tx.ExecContext(ctx, "INSERT INTO credit_score (user_id,score,version) VALUES (?,55,1) ON DUPLICATE KEY UPDATE score=GREATEST(0,score-5),version=version+1", *c.GrabberID)
-				}
-			}
+			err = applyCredit(ctx, tx, *c.GrabberID, c.ID, c.Round, "GRAB_TIMEOUT_REVERT", -5)
 		}
 	}
 	if err != nil {

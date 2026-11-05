@@ -14,6 +14,7 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/yumestk/CampusGo/internal/errand"
+	"github.com/yumestk/CampusGo/internal/fundmq"
 	"github.com/yumestk/CampusGo/internal/platform/config"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
@@ -65,15 +66,18 @@ func run(logger *slog.Logger) error {
 		return err
 	}
 	g := &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: name}
+	registry := telemetry.NewRegistry("worker")
+	mq := &fundmq.Client{Namespace: name}
+	funds := &errand.Funds{Grabber: g, Send: mq.Send, Events: errand.NewFundMetrics(registry)}
 	var workers sync.WaitGroup
 	onError := func(err error) { logger.Error("worker operation failed", "cause_type", fmt.Sprintf("%T", err)) }
-	for _, run := range []func(){func() { g.RunRecovery(ctx, onError) }, func() { g.RunTimeoutScan(ctx, onError) }, func() { timeoutmq.Run(ctx, g, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), onError) }} {
+	for _, run := range []func(){func() { mq.Run(ctx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), true, onError) }, func() { funds.Run(ctx, onError) }, func() { g.RunRecovery(ctx, onError) }, func() { g.RunTimeoutScan(ctx, onError) }, func() { timeoutmq.Run(ctx, g, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), onError, funds) }} {
 		workers.Add(1)
 		go func() { defer workers.Done(); run() }()
 	}
 	router := http.NewServeMux()
 	router.HandleFunc("GET /livez", server.Liveness("worker"))
-	router.Handle("GET /metrics", promhttp.HandlerFor(telemetry.NewRegistry("worker"), promhttp.HandlerOpts{}))
+	router.Handle("GET /metrics", promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
 	err = server.Run(ctx, cfg, router, logger)
 	stop()
 	workers.Wait()

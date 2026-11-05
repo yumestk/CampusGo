@@ -75,3 +75,6 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261005182115-fad411399dd8 // indirect
 	google.golang.org/grpc v1.84.0 // indirect
 )
+
+// v5.1.4 source with synchronized metric-provider reads; see local ADR-016.
+replace github.com/apache/rocketmq-clients/golang/v5 => ./third_party/rocketmq-client-go

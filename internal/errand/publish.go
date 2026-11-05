@@ -35,8 +35,9 @@ type PublishResult struct {
 	ErrorCode   string `json:"errorCode"`
 }
 type Publisher struct {
-	DB  *sql.DB
-	IDs *idgen.Generator
+	Funds *Funds
+	DB    *sql.DB
+	IDs   *idgen.Generator
 }
 
 func ValidRequestKey(key string) bool {

@@ -13,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/errand"
+	"github.com/yumestk/CampusGo/internal/fundmq"
 	"github.com/yumestk/CampusGo/internal/platform/config"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
@@ -76,6 +77,16 @@ func run(logger *slog.Logger) error {
 	refreshDone := make(chan struct{})
 	go func() { defer close(refreshDone); details.RunRefresh(refreshCtx, db) }()
 	defer func() { stopRefresh(); <-refreshDone }()
-	httpapi.RegisterBusiness(router, &auth.Service{DB: db, Redis: cache, Config: identityConfig}, errand.Query{DB: db, Cache: details}, &errand.Publisher{DB: db, IDs: ids}, &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: dbName})
+	g := &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: dbName}
+	mq := &fundmq.Client{Namespace: dbName}
+	funds := &errand.Funds{Grabber: g, Send: mq.Send, Events: errand.NewFundMetrics(registry)}
+	mqCtx, stopMQ := context.WithCancel(ctx)
+	mqDone := make(chan struct{})
+	go func() {
+		defer close(mqDone)
+		mq.Run(mqCtx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), false, func(e error) { logger.Error("fund MQ operation failed", "cause_type", fmt.Sprintf("%T", e)) })
+	}()
+	defer func() { stopMQ(); <-mqDone }()
+	httpapi.RegisterBusiness(router, &auth.Service{DB: db, Redis: cache, Config: identityConfig}, errand.Query{DB: db, Cache: details}, &errand.Publisher{DB: db, IDs: ids, Funds: funds}, g)
 	return server.Run(ctx, cfg, router, logger)
 }
