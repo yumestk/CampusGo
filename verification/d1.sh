@@ -24,6 +24,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 sql <verification/fixtures/d1.sql
+export CAMPUSGO_OIDC_CALLBACK_URL=http://127.0.0.1:18080/api/auth/oidc/callback
 export CAMPUSGO_ENV=test CAMPUSGO_DATABASE=campusgo_verification
 export CAMPUSGO_SESSION_NAMESPACE="d1-$(date +%s)-$$"
 CAMPUSGO_INTEGRATION=1 go test -race -count=1 -p 1 ./internal/auth ./internal/transport/httpapi
@@ -40,5 +41,5 @@ for attempt in $(seq 1 30); do
 done
 test "$ready" = true
 python3 verification/d1-faults.py
-(cd web && npm ci && npm test && npm run build && npx playwright install chromium && npm run test:e2e -- d1.spec.ts)
+(cd web && export CAMPUSGO_WEB_API=http://127.0.0.1:18080 && npm ci && npm test && npm run build && npx playwright install chromium && npm run test:e2e -- d1.spec.ts)
 printf '%s\n' 'D1 identity, dependency recovery, query and browser checks passed.'

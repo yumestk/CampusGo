@@ -1,9 +1,9 @@
 export interface User { id: string; campusId: string; name: string; role: string }
-export interface Session { token: string; userId: string; expiresIn: string }
+export interface Session { token: string; userId: string; expiresIn: string; refreshToken?: string; mode?: "session"|"jwt" }
 export interface Card { id: string; campusId: string; publisherId: string; grabberId: string | null; title: string; type: string; status: string; rewardCents: string; slotTaken: number; slotTotal: number; round: number; confirmDeadline?: string | null; deliveredAt?: string | null; role: string; availableActions: string[] }
 export interface Page { items: Card[]; nextCursor: string }
 export interface StatusChange { time: string; from: string; to: string; round: number; operatorId: string }
-export interface AuthConfig { demoLoginEnabled: boolean; oidcEnabled: boolean; oidcCallbackOrigin: string }
+export interface AuthConfig { demoLoginEnabled: boolean; oidcEnabled: boolean; oidcCallbackOrigin: string; authMode?: "session"|"jwt" }
 export interface Balance { availableCents: string; frozenCents: string; version: string }
 export interface LedgerEntry { id: string; time: string; direction: string; amountCents: string; balanceAfterCents: string; accountVersion: string; refType: string; refId: string; bizNo: string }
 export interface LedgerPage { items: LedgerEntry[]; nextCursor: string }
@@ -22,7 +22,7 @@ export function validInteger(value: unknown): value is string {
 }
 function invalid(): never { throw new ApiError('INVALID_RESPONSE', '服务返回的数据格式异常，请重试'); }
 function sessionValue(value: Session): Session {
-  if (!value || !/^[A-Za-z0-9_-]{43}$/.test(value.token) || !validInteger(value.userId) || BigInt(value.userId) <= 0n || !validInteger(value.expiresIn) || BigInt(value.expiresIn) <= 0n) invalid();
+  if (!value || !(value.mode==='jwt'? /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value.token)&&typeof value.refreshToken==='string'&&/^[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$/.test(value.refreshToken):/^[A-Za-z0-9_-]{43}$/.test(value.token)) || !validInteger(value.userId) || BigInt(value.userId) <= 0n || !validInteger(value.expiresIn) || BigInt(value.expiresIn) <= 0n) invalid();
   return value;
 }
 function cardValue(value: Card): Card {
@@ -35,12 +35,32 @@ export function money(cents: string): string {
   return `${amount < 0n ? '-' : ''}¥${(positive / 100n).toLocaleString('zh-CN')}.${(positive % 100n).toString().padStart(2, '0')}`;
 }
 export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>, fetcher: typeof fetch, unauthorized: () => void) {
-  let token = storage.getItem(key);
-  if (token && !/^[A-Za-z0-9_-]{43}$/.test(token)) { token = null; storage.removeItem(key); }
-  function clear() { token = null; storage.removeItem(key); unauthorized(); }
-  function acceptSession(value: Session) { const valid = sessionValue(value); storage.setItem(key, valid.token); token = valid.token; }
-  async function request<T>(path: string, method = 'GET', body?: unknown, authenticated = true, idempotencyKey?: string, acceptGrabTerminal = false): Promise<T> {
+  const jwtKey='campusgo_jwt_pair';
+  type Stored={session:Session;pending?:string};
+  function readJWT():Stored|null {try {const x=JSON.parse(storage.getItem(jwtKey)||'null') as Stored|null;return x&&x.session.mode==='jwt'?{...x,session:sessionValue(x.session)}:null;}catch{return null;}}
+  let pair=readJWT(),token=pair?.session.token||storage.getItem(key);
+  if (token && !/^[A-Za-z0-9_.-]{43,4096}$/.test(token)) { token = null; storage.removeItem(key); }
+  function clear() { token = null;pair=null;storage.removeItem(key);storage.removeItem(jwtKey); unauthorized(); }
+  function acceptSession(value: Session) { const valid = sessionValue(value);pair=valid.mode==='jwt'?{session:valid}:null;if(pair)storage.setItem(jwtKey,JSON.stringify(pair));else storage.removeItem(jwtKey);storage.setItem(key, valid.token); token = valid.token; }
+  let refreshing:Promise<Session>|null=null;
+  async function refresh():Promise<Session>{
+   if(refreshing)return refreshing;
+   const run=async()=>{
+    const current=readJWT();if(!current)throw new ApiError('UNAUTHORIZED','请重新登录',401);
+    // Web Locks serializes refresh across tabs; storage re-read observes another tab's rotation.
+    if(pair&&current.session.userId!==pair.session.userId){token=null;pair=null;unauthorized();throw new ApiError('SESSION_CHANGED','其他窗口已切换身份，请重新登录');}
+    if(current.session.token!==token){token=current.session.token;pair=current;return current.session;}
+    const old=token;current.pending=current.pending||crypto.randomUUID();storage.setItem(jwtKey,JSON.stringify(current));pair=current;
+    let response:Response;try{response=await fetcher('/api/auth/refresh',{method:'POST',headers:{'Content-Type':'application/json','Idempotency-Key':current.pending},body:JSON.stringify({refreshToken:current.session.refreshToken}),cache:'no-store'});}catch{throw new ApiError('NETWORK','续期结果待确认，请重试；原刷新请求已保留',0,1000);}
+    const value=await response.json();if(!response.ok||value.code!=='OK'){if(response.status===401&&token===old)clear();throw new ApiError(value.code||'REFRESH_FAILED',value.message||'登录续期失败，请重试',response.status,1000);}
+    if(token!==old)throw new ApiError('SESSION_CHANGED','登录状态已变化，请刷新页面');
+    acceptSession(value.data);return value.data as Session;
+   };
+   refreshing=(async()=>{if(typeof navigator!=='undefined'&&navigator.locks)return await navigator.locks.request('campusgo-refresh',run);return await run();})().finally(()=>{refreshing=null;});return refreshing;
+  }
+  async function request<T>(path: string, method = 'GET', body?: unknown, authenticated = true, idempotencyKey?: string, acceptGrabTerminal = false, retried = false): Promise<T> {
     const sentToken = authenticated ? token : null;
+    const sentUser=pair?.session.userId;
     const headers: Record<string, string> = { 'X-Request-Id': crypto.randomUUID() };
     if (sentToken) headers.Authorization = `Bearer ${sentToken}`;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -48,6 +68,7 @@ export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'rem
     let response: Response;
     try { response = await fetcher(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), cache: 'no-store' }); }
     catch { throw new ApiError('NETWORK', '网络连接失败，请稍后重试', 0, 1000); }
+    if(response.status===401 && sentToken && readJWT() && path!=='/api/auth/logout' && !retried && (!sentUser||pair?.session.userId===sentUser)){await refresh();return request<T>(path,method,body,authenticated,idempotencyKey,acceptGrabTerminal,true);}
     if (response.status === 401 && sentToken && token === sentToken) clear();
     let result: { code: string; message: string; data: T };
     try { result = await response.json(); } catch { throw new ApiError('INVALID_RESPONSE', '服务暂时不可用，请稍后重试', response.status); }
@@ -66,11 +87,11 @@ export function createClient(storage: Pick<Storage, 'getItem' | 'setItem' | 'rem
     return { items: value.items.map(cardValue), nextCursor: value.nextCursor };
   }
   return {
-    request, acceptSession, getToken: () => token,
+    request, acceptSession, refresh, getToken: () => token,
     config: () => request<AuthConfig>('/api/auth/config', 'GET', undefined, false),
     async me() { const user = await request<User>('/api/users/me'); if (!user || !validInteger(user.id) || !validInteger(user.campusId)) invalid(); return user; },
     async login(userId: string) { const value = sessionValue(await request<Session>('/api/auth/login', 'POST', { userId }, false)); acceptSession(value); return value; },
-    async logout() { const sentToken = token; await request('/api/auth/logout', 'POST'); if (token === sentToken) clear(); },
+    async logout() { const sentToken = token,sentFamily=pair?.session.refreshToken?.split('.')[0]; await request('/api/auth/logout', 'POST'); if (token === sentToken || (sentFamily && pair?.session.refreshToken?.split('.')[0]===sentFamily)) clear(); },
     list: (cursor = '', status = 'PUBLISHED') => list(`/api/errands?cursor=${encodeURIComponent(cursor)}&status=${encodeURIComponent(status)}`),
     mine: (role: string, cursor = '') => list(`/api/errands/mine?cursor=${encodeURIComponent(cursor)}&role=${encodeURIComponent(role)}`),
     credit:()=>request<{score:number;version:string}>('/api/credit'),

@@ -1,0 +1,5 @@
+# Verification-only fixture routes. Never mount in the normal gateway deployment.
+services:
+  apisix:
+    volumes:
+      - ../../work/d6-apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro

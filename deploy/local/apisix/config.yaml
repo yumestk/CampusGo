@@ -15,6 +15,5 @@ plugins:
   - proxy-rewrite
   - limit-count
   - limit-conn
-  - serverless-pre-function
 # HTTP/WebSocket deployment; no stream proxy plugins are required.
 stream_plugins: []

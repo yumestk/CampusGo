@@ -34,7 +34,7 @@ for attempt in $(seq 1 30); do
  sleep 1
 done
 test "$ready" = true
-(cd web && npm ci && npm test && npm run build && npx playwright install chromium && npm run test:e2e -- d4.spec.ts)
+(cd web && export CAMPUSGO_WEB_API=http://127.0.0.1:18080 && npm ci && npm test && npm run build && npx playwright install chromium && npm run test:e2e -- d4.spec.ts)
 cleanup
 api_pid=''
 worker_pid=''

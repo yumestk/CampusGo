@@ -26,13 +26,6 @@ routes:
       type: roundrobin
       nodes:
         "host.docker.internal:18080": 1
-  - id: internal-deny
-    uri: /api/internal/*
-    plugins:
-      serverless-pre-function:
-        phase: rewrite
-        functions:
-          - "return function() return ngx.exit(404) end"
   - id: probe-headers
     uri: /__probe/headers
     plugins:
