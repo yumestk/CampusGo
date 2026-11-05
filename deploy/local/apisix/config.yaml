@@ -8,9 +8,13 @@ deployment:
 nginx_config:
   worker_processes: 1
   error_log: /dev/stderr
-  envs: [CAMPUSGO_REDIS_PASSWORD]
+  envs: [CAMPUSGO_REDIS_PASSWORD, CAMPUSGO_GATEWAY_SECRET]
 plugins:
+  - request-id
+  - campusgo-entry
   - proxy-rewrite
   - limit-count
   - limit-conn
   - serverless-pre-function
+# HTTP/WebSocket deployment; no stream proxy plugins are required.
+stream_plugins: []

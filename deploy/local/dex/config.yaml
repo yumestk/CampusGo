@@ -14,7 +14,7 @@ staticClients:
   - id: campusgo-web
     name: CampusGo Local
     secretEnv: CAMPUSGO_OIDC_CLIENT_SECRET
-    redirectURIs: [http://127.0.0.1:18080/api/auth/oidc/callback]
+    redirectURIs: [http://127.0.0.1:18080/api/auth/oidc/callback, http://127.0.0.1:19080/api/auth/oidc/callback, http://localhost:19080/api/auth/oidc/callback]
 enablePasswordDB: true
 staticPasswords:
   - email: publisher@campusgo.local

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,7 +34,7 @@ func fail(c *gin.Context, err error) {
 	if !errors.As(err, &f) {
 		f = &fault.Error{Code: "INTERNAL_ERROR", Status: 500, Cause: err}
 	}
-	messages := map[string]string{"UNAUTHORIZED": "未登录或会话已过期", "FORBIDDEN": "没有访问权限", "IDENTITY_NOT_BOUND": "身份尚未绑定校园用户", "INVALID_REQUEST": "请求参数不合法", "DEPENDENCY_UNAVAILABLE": "依赖暂不可用，请稍后重试", "ERRAND_NOT_FOUND": "任务不存在", "INTERNAL_ERROR": "系统内部错误", "NOT_FOUND": "接口不存在", "METHOD_NOT_ALLOWED": "请求方法不支持", "OIDC_DISABLED": "未启用统一身份登录"}
+	messages := map[string]string{"REFRESH_REUSED": "刷新凭证已被重复使用，请重新登录", "REFRESH_DISABLED": "当前模式无需刷新，请重新登录", "UNAUTHORIZED": "未登录或会话已过期", "FORBIDDEN": "没有访问权限", "IDENTITY_NOT_BOUND": "身份尚未绑定校园用户", "INVALID_REQUEST": "请求参数不合法", "DEPENDENCY_UNAVAILABLE": "依赖暂不可用，请稍后重试", "ERRAND_NOT_FOUND": "任务不存在", "INTERNAL_ERROR": "系统内部错误", "NOT_FOUND": "接口不存在", "METHOD_NOT_ALLOWED": "请求方法不支持", "OIDC_DISABLED": "未启用统一身份登录"}
 	for code, message := range map[string]string{"FUND_RESULT_UNKNOWN": "资金操作结果待确认，请查询原请求结果", "FUND_EXPIRED": "该请求已过期且未执行，请刷新后重新操作", "FUNDS_INCONSISTENT": "资金事实异常，需要核查", "ACTION_RESULT_UNKNOWN": "操作结果待确认，请刷新任务进度", "NOT_DUE": "尚未到自动结算时间", "CONFIRM_RESULT_UNKNOWN": "确认结果暂不确定，请刷新进度或重试同一轮确认", "CONFIRM_DEADLINE_PASSED": "确认期限已过，请刷新任务进展", "NOT_CURRENT_GRABBER": "当前任务已不属于你", "STALE_VERSION": "任务轮次或状态已变化，请刷新", "TOO_MANY_ONGOING": "在途任务已达 5 单上限", "CREDIT_TOO_LOW": "信用分未达到要求", "INVALID_STATUS": "当前状态不能执行此操作", "ACCOUNT_NOT_FOUND": "钱包账户不存在", "ESCROW_NOT_FOUND": "托管记录不存在或无权查看", "INSUFFICIENT_BALANCE": "可用余额不足", "BALANCE_LIMIT": "账户金额或记账序号已达上限", "IDEMPOTENCY_CONFLICT": "请求号已用于不同的操作内容", "GRAB_RESULT_UNKNOWN": "抢单结果暂未确认，请查询结果或使用原请求号重试", "PUBLISH_RESULT_UNKNOWN": "发布结果暂未确认，请查询结果或使用原请求号重试"} {
 		messages[code] = message
 	}
@@ -73,6 +74,10 @@ func bearer(c *gin.Context) string {
 func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, p *errand.Publisher, grabbers ...*errand.Grabber) {
 	api := router.Group("/api")
 	api.Use(func(c *gin.Context) {
+		if s.Config.RequireGateway && (len(c.Request.Header.Values("X-CampusGo-Gateway")) != 1 || subtle.ConstantTimeCompare([]byte(c.GetHeader("X-CampusGo-Gateway")), []byte(s.Config.GatewaySecret)) != 1) {
+			fail(c, fault.New("FORBIDDEN", 403))
+			return
+		}
 		duration := 3 * time.Second
 		if strings.HasPrefix(c.FullPath(), "/api/auth/oidc/") {
 			duration = 15 * time.Second
@@ -91,7 +96,7 @@ func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, p *er
 		if callback != nil && callback.Host != "" {
 			origin = callback.Scheme + "://" + callback.Host
 		}
-		ok(c, gin.H{"demoLoginEnabled": s.Config.Demo, "oidcEnabled": s.Config.Issuer != "", "oidcCallbackOrigin": origin})
+		ok(c, gin.H{"demoLoginEnabled": s.Config.Demo, "oidcEnabled": s.Config.Issuer != "", "oidcCallbackOrigin": origin, "authMode": s.Config.Mode})
 	})
 	api.POST("/auth/login", func(c *gin.Context) {
 		var body struct {
@@ -107,6 +112,25 @@ func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, p *er
 			return
 		}
 		ok(c, session)
+	})
+	api.POST("/auth/refresh", func(c *gin.Context) {
+		var body struct {
+			RefreshToken string `json:"refreshToken"`
+		}
+		if e := decode(c, &body); e != nil {
+			fail(c, e)
+			return
+		}
+		if len(c.Request.Header.Values("Idempotency-Key")) != 1 {
+			fail(c, fault.New("INVALID_REQUEST", 400))
+			return
+		}
+		out, e := s.Refresh(c.Request.Context(), body.RefreshToken, c.GetHeader("Idempotency-Key"))
+		if e != nil {
+			fail(c, e)
+			return
+		}
+		ok(c, out)
 	})
 	api.POST("/auth/logout", func(c *gin.Context) {
 		if err := s.Logout(c.Request.Context(), bearer(c)); err != nil {

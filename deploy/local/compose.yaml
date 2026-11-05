@@ -137,10 +137,12 @@ services:
     ports: ["127.0.0.1:19080:9080"]
     environment:
       CAMPUSGO_REDIS_PASSWORD: ${CAMPUSGO_REDIS_PASSWORD:?Generate a local .env first}
+      CAMPUSGO_GATEWAY_SECRET: ${CAMPUSGO_GATEWAY_SECRET:?Run make env}
     extra_hosts: ["host.docker.internal:host-gateway"]
     volumes:
       - ./apisix/config.yaml:/usr/local/apisix/conf/config.yaml:ro
       - ./apisix/apisix.yaml:/usr/local/apisix/conf/apisix.yaml:ro
+      - ./apisix/campusgo-entry.lua:/usr/local/apisix/apisix/plugins/campusgo-entry.lua:ro
     depends_on:
       redis: {condition: service_healthy}
     mem_limit: 256m

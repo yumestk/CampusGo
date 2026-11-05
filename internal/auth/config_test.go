@@ -13,7 +13,7 @@ func TestConfigurationGuards(t *testing.T) {
 		values map[string]string
 		valid  bool
 	}{
-		{"production demo", map[string]string{"CAMPUSGO_ENV": "production", "CAMPUSGO_DEMO_LOGIN": "true"}, false},
+		{"production demo", map[string]string{"CAMPUSGO_REQUIRE_GATEWAY": "true", "CAMPUSGO_GATEWAY_SECRET": "test-gateway-secret-longer-than-32-bytes", "CAMPUSGO_ENV": "production", "CAMPUSGO_DEMO_LOGIN": "true"}, false},
 		{"production missing issuer", map[string]string{"CAMPUSGO_ENV": "production"}, false},
 		{"local demo", map[string]string{"CAMPUSGO_ENV": "local", "CAMPUSGO_DEMO_LOGIN": "true"}, true},
 		{"namespace injection", map[string]string{"CAMPUSGO_SESSION_NAMESPACE": "a:b"}, false},
@@ -46,7 +46,7 @@ func assertCode(t *testing.T, err error, code string) {
 
 func TestOIDCConfigurationTrustBoundaries(t *testing.T) {
 	base := map[string]string{
-		"CAMPUSGO_ENV": "production", "CAMPUSGO_DEMO_LOGIN": "false", "CAMPUSGO_SESSION_NAMESPACE": "live", "CAMPUSGO_SESSION_TTL": "2h",
+		"CAMPUSGO_REQUIRE_GATEWAY": "true", "CAMPUSGO_GATEWAY_SECRET": "test-gateway-secret-longer-than-32-bytes", "CAMPUSGO_ENV": "production", "CAMPUSGO_DEMO_LOGIN": "false", "CAMPUSGO_SESSION_NAMESPACE": "live", "CAMPUSGO_SESSION_TTL": "2h",
 		"CAMPUSGO_OIDC_ISSUER": "https://identity.example/dex", "CAMPUSGO_OIDC_CLIENT_ID": "campusgo", "CAMPUSGO_OIDC_CLIENT_SECRET": "a-test-secret-at-least-24-characters",
 		"CAMPUSGO_OIDC_CALLBACK_URL": "https://api.example/api/auth/oidc/callback", "CAMPUSGO_FRONTEND_ORIGIN": "https://web.example",
 	}

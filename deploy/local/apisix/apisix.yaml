@@ -1,5 +1,25 @@
-# Local D0 verification routes; not the D6 business gateway policy.
+# Business entry policies; /__probe routes exist only in this loopback local fixture.
 routes:
+  - id: business
+    uri: /api/*
+    priority: -10
+    enable_websocket: true
+    plugins:
+      limit-conn:
+        conn: 1000
+        burst: 0
+        default_conn_delay: 0.1
+        key: server_addr
+        rejected_code: 503
+        rejected_msg: '{"code":"GATEWAY_BUSY","message":"入口繁忙，请稍后重试","data":null}'
+      request-id: {include_in_response: true}
+      campusgo-entry: {}
+    upstream:
+      type: roundrobin
+      retries: 0
+      timeout: {connect: 1, send: 5, read: 20}
+      nodes:
+        "host.docker.internal:18080": 1
   - id: api-liveness
     uri: /livez
     upstream:

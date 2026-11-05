@@ -13,6 +13,9 @@ import (
 type Config struct {
 	Environment, Namespace                                      string
 	Demo                                                        bool
+	Mode, JWTSecret, GatewaySecret                              string
+	RequireGateway                                              bool
+	RefreshTTL                                                  time.Duration
 	SessionTTL                                                  time.Duration
 	Issuer, ClientID, ClientSecret, CallbackURL, FrontendOrigin string
 }
@@ -25,6 +28,40 @@ func LoadConfig() (Config, error) {
 	}
 	if c.Namespace == "" {
 		c.Namespace = "v1"
+	}
+	c.Mode = os.Getenv("CAMPUSGO_AUTH_MODE")
+	if c.Mode == "" {
+		c.Mode = "session"
+	}
+	if c.Mode != "session" && c.Mode != "jwt" {
+		return c, fmt.Errorf("invalid auth mode")
+	}
+	c.JWTSecret = os.Getenv("CAMPUSGO_JWT_SECRET")
+	if c.Mode == "jwt" && len(c.JWTSecret) < 32 {
+		return c, fmt.Errorf("JWT secret must contain at least 32 bytes")
+	}
+	c.RefreshTTL = 7 * 24 * time.Hour
+	if v := os.Getenv("CAMPUSGO_REFRESH_TTL"); v != "" {
+		d, e := time.ParseDuration(v)
+		if e != nil || d < time.Minute || d > 30*24*time.Hour {
+			return c, fmt.Errorf("invalid refresh TTL")
+		}
+		c.RefreshTTL = d
+	}
+	c.GatewaySecret = os.Getenv("CAMPUSGO_GATEWAY_SECRET")
+	c.RequireGateway = c.Environment == "production"
+	if v := os.Getenv("CAMPUSGO_REQUIRE_GATEWAY"); v != "" {
+		b, e := strconv.ParseBool(v)
+		if e != nil {
+			return c, e
+		}
+		c.RequireGateway = b
+	}
+	if c.Environment == "production" && !c.RequireGateway {
+		return c, fmt.Errorf("production requires gateway boundary")
+	}
+	if c.RequireGateway && len(c.GatewaySecret) < 32 {
+		return c, fmt.Errorf("gateway secret must contain at least 32 bytes")
 	}
 	var err error
 	if value, ok := os.LookupEnv("CAMPUSGO_DEMO_LOGIN"); ok {

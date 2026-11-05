@@ -24,9 +24,12 @@ type User struct {
 	Role     string `json:"role"`
 }
 type Session struct {
-	Token     string `json:"token"`
-	UserID    int64  `json:"userId,string"`
-	ExpiresIn int64  `json:"expiresIn,string"`
+	Token        string `json:"token"`
+	UserID       int64  `json:"userId,string"`
+	ExpiresIn    int64  `json:"expiresIn,string"`
+	RefreshToken string `json:"refreshToken,omitempty"`
+	Mode         string `json:"mode,omitempty"`
+	expiresAt    time.Time
 }
 type Service struct {
 	DB     *sql.DB
@@ -69,6 +72,9 @@ func (s *Service) User(ctx context.Context, id int64) (User, error) {
 	return u, nil
 }
 func (s *Service) issue(ctx context.Context, id int64) (Session, error) {
+	if s.Config.Mode == "jwt" {
+		return s.issueJWT(ctx, id)
+	}
 	for range 3 {
 		token := randomToken()
 		ok, err := s.Redis.SetNX(ctx, s.key("session", token), strconv.FormatInt(id, 10), s.Config.SessionTTL).Result()
@@ -76,7 +82,7 @@ func (s *Service) issue(ctx context.Context, id int64) (Session, error) {
 			return Session{}, fault.Dependency(err)
 		}
 		if ok {
-			return Session{Token: token, UserID: id, ExpiresIn: int64(s.Config.SessionTTL / time.Second)}, nil
+			return Session{Token: token, UserID: id, ExpiresIn: int64(s.Config.SessionTTL / time.Second), Mode: "session"}, nil
 		}
 	}
 	return Session{}, fault.Dependency(fmt.Errorf("session token collision budget exhausted"))
@@ -95,6 +101,9 @@ func (s *Service) DemoLogin(ctx context.Context, id int64) (Session, error) {
 	return s.issue(ctx, id)
 }
 func (s *Service) Resolve(ctx context.Context, token string) (User, error) {
+	if s.Config.Mode == "jwt" {
+		return s.resolveJWT(ctx, token)
+	}
 	if !ValidToken(token) {
 		return User{}, fault.New("UNAUTHORIZED", 401)
 	}
@@ -112,6 +121,9 @@ func (s *Service) Resolve(ctx context.Context, token string) (User, error) {
 	return s.User(ctx, id)
 }
 func (s *Service) Logout(ctx context.Context, token string) error {
+	if s.Config.Mode == "jwt" {
+		return s.logoutJWT(ctx, token)
+	}
 	if !ValidToken(token) {
 		return fault.New("UNAUTHORIZED", 401)
 	}

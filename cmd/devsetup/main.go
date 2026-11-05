@@ -57,6 +57,9 @@ func setup(templatePath, envPath string) error {
 			value = base64.StdEncoding.EncodeToString(hash)
 		} else if strings.HasPrefix(value, "GENERATE_") {
 			value = rand.Text()
+			if key == "CAMPUSGO_JWT_SECRET" || key == "CAMPUSGO_GATEWAY_SECRET" {
+				value += rand.Text()
+			}
 		}
 		known[key] = value
 		appended.WriteString(key + "=" + value + "\n")
