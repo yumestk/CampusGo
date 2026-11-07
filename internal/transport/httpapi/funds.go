@@ -2,11 +2,12 @@ package httpapi
 
 import (
 	"database/sql"
-	"github.com/yumestk/CampusGo/internal/application"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+
+	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"github.com/yumestk/CampusGo/internal/transport/wire"
@@ -43,7 +44,7 @@ func registerFunds(api *gin.RouterGroup, p *application.Publisher, db *sql.DB) {
 			fail(c, fault.New("INVALID_REQUEST", 400))
 			return
 		}
-		r, err := p.Publish(c.Request.Context(), u, keys[0], errand.PublishCommand{CampusID: campus, Type: b.Type, Title: b.Title, RewardCents: int64(b.RewardCents), SlotTotal: slots})
+		r, err := p.Publish(c.Request.Context(), u, keys[0], mysqlstore.PublishCommand{CampusID: campus, Type: b.Type, Title: b.Title, RewardCents: int64(b.RewardCents), SlotTotal: slots})
 		if err != nil {
 			fail(c, err)
 			return

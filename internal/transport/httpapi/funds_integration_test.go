@@ -11,7 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+
+	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
@@ -41,7 +42,7 @@ func TestIntegrationD2HTTP(t *testing.T) {
 	defer s.Logout(context.Background(), session.Token)
 	ids, _ := idgen.New(1020)
 	router := NewRouter(slog.New(slog.NewJSONHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
-	registerTestBusiness(router, s, errand.Query{DB: db}, &errand.PublishStore{DB: db, IDs: ids})
+	registerTestBusiness(router, s, mysqlstore.Query{DB: db}, &mysqlstore.PublishStore{DB: db, IDs: ids})
 	key := uuid.NewString()
 	defer db.Exec("DELETE FROM publish_request WHERE publisher_id=2002 AND request_key=?", key)
 	send := func(method, path, body, token string, keys ...string) *httptest.ResponseRecorder {

@@ -16,7 +16,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+
+	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
@@ -41,7 +42,7 @@ func TestIntegrationHTTPIdentityAndQueries(t *testing.T) {
 	s := &auth.Service{DB: db, Redis: cache, Config: auth.Config{Environment: "test", Namespace: uuid.NewString(), Demo: true, SessionTTL: time.Minute}}
 	router := NewRouter(slog.New(slog.NewJSONHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
 	ids, _ := idgen.New(1020)
-	registerTestBusiness(router, s, errand.Query{DB: db}, &errand.PublishStore{DB: db, IDs: ids})
+	registerTestBusiness(router, s, mysqlstore.Query{DB: db}, &mysqlstore.PublishStore{DB: db, IDs: ids})
 	request := func(method, path, token, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -105,7 +106,7 @@ func TestIntegrationHTTPIdentityAndQueries(t *testing.T) {
 	}
 	wHistory := request("GET", "/api/errands/mine?cursor=&role=GRABBED_BY_ME", tokens[2001], "")
 	var history struct {
-		Data errand.Page `json:"data"`
+		Data mysqlstore.Page `json:"data"`
 	}
 	if err := json.Unmarshal(wHistory.Body.Bytes(), &history); err != nil || wHistory.Code != 200 {
 		t.Fatal("historical grabs unavailable", err)
@@ -141,7 +142,7 @@ func TestIntegrationHTTPIdentityAndQueries(t *testing.T) {
 	broken.Redis = redis.NewClient(&redis.Options{Addr: address, MaxRetries: -1, DialTimeout: 100 * time.Millisecond})
 	defer broken.Redis.Close()
 	failedRouter := NewRouter(slog.New(slog.NewJSONHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
-	registerTestBusiness(failedRouter, &broken, errand.Query{DB: db}, &errand.PublishStore{DB: db, IDs: ids})
+	registerTestBusiness(failedRouter, &broken, mysqlstore.Query{DB: db}, &mysqlstore.PublishStore{DB: db, IDs: ids})
 	r := httptest.NewRequest("GET", "/api/users/me", nil)
 	r.Header.Set("Authorization", "Bearer "+tokens[1001])
 	w := httptest.NewRecorder()

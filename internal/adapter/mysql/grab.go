@@ -1,21 +1,19 @@
 package mysql
 
 import (
-	"github.com/yumestk/CampusGo/internal/contracts"
-
 	"bytes"
 	"context"
-
 	"database/sql"
-
 	"errors"
 	"fmt"
-	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
 	"github.com/yumestk/CampusGo/internal/auth"
+	"github.com/yumestk/CampusGo/internal/contracts"
+	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
 )
@@ -270,7 +268,7 @@ func (g *TaskStore) observe(ctx context.Context, r grabRequest) (GrabResult, err
 	return r.Result(), nil
 }
 func (g *TaskStore) GrabResult(ctx context.Context, u auth.User, key string, id int64) (GrabResult, error) {
-	if !ValidRequestKey(key) || id <= 0 {
+	if !contracts.ValidRequestKey(key) || id <= 0 {
 		return GrabResult{}, fault.New("INVALID_REQUEST", 400)
 	}
 	r, err := scanGrab(g.DB.QueryRowContext(ctx, "SELECT "+grabRequestColumns+" FROM grab_request WHERE campus_id=? AND runner_id=? AND request_key=?", u.CampusID, u.ID, key))
@@ -293,6 +291,9 @@ type GrabResult = contracts.GrabResult
 type grabRequest = contracts.GrabRequest
 
 func (g *TaskStore) Admit(ctx context.Context, user, task int64, query bool) (func(), error) {
+	if g.Limits == nil {
+		return nil, fault.New("DEPENDENCY_UNAVAILABLE", 503)
+	}
 	return g.Limits.admit(ctx, user, task, query)
 }
 func (g *TaskStore) RegisterGrab(ctx context.Context, u contracts.Actor, key string, c GrabCommand, hash []byte) (grabRequest, bool, error) {
@@ -303,7 +304,8 @@ func (g *TaskStore) RegisterGrab(ctx context.Context, u contracts.Actor, key str
 	return r, owner, err
 }
 func (g *TaskStore) CheckGrab(ctx context.Context, u contracts.Actor, c GrabCommand, version int64) (string, error) {
-	return g.grabEligibility(ctx, g.DB, u, c, version)
+	reason, err := g.grabEligibility(ctx, g.DB, u, c, version)
+	return reason, fault.Dependency(err)
 }
 func (g *TaskStore) FinishGrab(ctx context.Context, r grabRequest, state, code string) (GrabResult, error) {
 	return g.finishGrab(ctx, r, state, code)

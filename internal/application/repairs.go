@@ -3,8 +3,9 @@ package application
 import (
 	"context"
 	"fmt"
-	"github.com/yumestk/CampusGo/internal/contracts"
 	"time"
+
+	"github.com/yumestk/CampusGo/internal/contracts"
 )
 
 type RepairStore interface {

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"github.com/yumestk/CampusGo/internal/application"
-
 	"context"
 	"encoding/json"
 	"flag"
@@ -10,7 +8,8 @@ import (
 	"os"
 	"time"
 
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 )
 
@@ -35,7 +34,7 @@ func run() error {
 		return err
 	}
 	defer db.Close()
-	store := &errand.TaskStore{DB: db}
+	store := &mysqlstore.TaskStore{DB: db}
 	g := &application.Repairs{Store: store}
 	if *replay != 0 {
 		ok, err := g.ReplayRepair(ctx, *replay, *reason)

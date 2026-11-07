@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {
+      "commandJSON": "{\"campusId\":\"1\",\"type\":\"DELIVERY\",\"title\":\"legacy publication\",\"rewardCents\":\"1001\",\"slotTotal\":1}",
+      "fingerprint": "180d4927e7e5957b312d073d12e3707e663537d33a1f2c9a3376726b520e4adf",
+      "kind": "publish"
+    },
+    {
+      "commandJSON": "{\"errandId\":\"9007199254741001\",\"expectedRound\":0}",
+      "fingerprint": "2f0ddf35edb449a0fb917866a61ca6025f150727f323068e5511cee38d2f71e0",
+      "kind": "grab"
+    }
+  ],
+  "sourceCommit": "3dfaab25f4294ace69c3e130e53221a82600c4f9"
+}

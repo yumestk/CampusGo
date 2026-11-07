@@ -4,11 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
+	"sort"
+
 	"github.com/yumestk/CampusGo/internal/auth"
 	walletdomain "github.com/yumestk/CampusGo/internal/domain/wallet"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
-	"math"
-	"sort"
 )
 
 // Posting helpers never begin or commit. They preserve the caller's atomic

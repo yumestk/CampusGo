@@ -3,8 +3,10 @@ package mysql
 import (
 	"context"
 	"database/sql"
+
 	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
+	walletdomain "github.com/yumestk/CampusGo/internal/domain/wallet"
 )
 
 type testFunds struct {
@@ -31,3 +33,5 @@ func (g *TaskStore) ScanAutoSettle(ctx context.Context, f *testFunds) error {
 
 func decodeFund(body []byte) (FundEvent, error) { return application.DecodeFundEvent(body) }
 func FundNotices(e FundEvent) map[int64]string  { return application.FundNotices(e) }
+
+func Commission(amount int64) int64 { return walletdomain.Commission(amount) }

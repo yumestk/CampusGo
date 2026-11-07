@@ -4,11 +4,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"github.com/yumestk/CampusGo/internal/contracts"
-	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/yumestk/CampusGo/internal/contracts"
+	fault "github.com/yumestk/CampusGo/internal/failure"
 )
 
 type PublishingStore interface {

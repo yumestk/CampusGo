@@ -10,18 +10,13 @@ import (
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
+
+	"github.com/yumestk/CampusGo/internal/failure"
 )
 
-type Error struct {
-	Code             string
-	Status           int
-	Cause            error
-	RetryAfterMillis int64
-}
+type Error = failure.Error
 
-func (e *Error) Error() string          { return e.Code }
-func (e *Error) Unwrap() error          { return e.Cause }
-func New(code string, status int) error { return &Error{Code: code, Status: status} }
+var New = failure.New
 
 // Only known availability failures are retryable. Schema, credential and code errors remain 500.
 func Dependency(err error) error {

@@ -1,16 +1,16 @@
 package mysql
 
 import (
-	"github.com/yumestk/CampusGo/internal/contracts"
-
 	"context"
 	"database/sql"
 	"fmt"
-	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
 	"strconv"
 
 	"github.com/redis/go-redis/v9"
+
 	"github.com/yumestk/CampusGo/internal/auth"
+	"github.com/yumestk/CampusGo/internal/contracts"
+	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 )
 
@@ -25,7 +25,7 @@ func (g *CreditQuery) CreditSelf(ctx context.Context, u auth.User) (CreditProfil
 	if err != nil {
 		return p, fault.Dependency(err)
 	}
-	rows, err := tx.QueryContext(ctx, "SELECT id,kind,delta,errand_id,created_at FROM credit_event WHERE user_id=? AND created_at>=TIMESTAMPADD(DAY,-30,CURRENT_TIMESTAMP(3)) ORDER BY created_at DESC,id DESC LIMIT 50", u.ID)
+	rows, err := tx.QueryContext(ctx, "SELECT id,kind,delta,errand_id,created_at FROM credit_event WHERE user_id=? AND created_at>=TIMESTAMPADD(DAY,?,CURRENT_TIMESTAMP(3)) ORDER BY created_at DESC,id DESC LIMIT ?", u.ID, -creditdomain.WindowDays, creditdomain.HistoryLimit)
 	if err != nil {
 		return p, fault.Dependency(err)
 	}

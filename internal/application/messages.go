@@ -2,8 +2,9 @@ package application
 
 import (
 	"context"
-	"github.com/yumestk/CampusGo/internal/contracts"
 	"time"
+
+	"github.com/yumestk/CampusGo/internal/contracts"
 )
 
 type MessageStore interface {

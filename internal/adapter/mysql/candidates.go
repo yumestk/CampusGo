@@ -1,8 +1,6 @@
 package mysql
 
 import (
-	"github.com/yumestk/CampusGo/internal/contracts"
-
 	"context"
 	"fmt"
 	"strconv"
@@ -11,6 +9,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"github.com/yumestk/CampusGo/internal/contracts"
 )
 
 func (g *TaskStore) candidateKeys(id int64) []string {

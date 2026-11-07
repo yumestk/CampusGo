@@ -1,18 +1,17 @@
 package mysql
 
 import (
-	"github.com/yumestk/CampusGo/internal/application"
-
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/yumestk/CampusGo/internal/contracts"
-
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yumestk/CampusGo/internal/application"
+	"github.com/yumestk/CampusGo/internal/contracts"
 )
 
 // Check locks the durable request to distinguish an expired non-execution from
@@ -192,7 +191,7 @@ func (f *FundStore) Dead(ctx context.Context) ([]FundRecovery, error) {
 }
 func (f *FundStore) Replay(ctx context.Context, key, reason string) (bool, error) {
 	reason = strings.TrimSpace(reason)
-	if !ValidRequestKey(key) || len(reason) == 0 || len(reason) > 200 || strings.ContainsAny(reason, "\r\n") {
+	if !contracts.ValidRequestKey(key) || len(reason) == 0 || len(reason) > 200 || strings.ContainsAny(reason, "\r\n") {
 		return false, fmt.Errorf("valid request UUID and 1-200 byte single-line reason required")
 	}
 	r, err := f.DB.ExecContext(ctx, "UPDATE fund_request SET recovery_state='PENDING',recovery_attempts=0,replay_count=replay_count+1,replay_reason=?,next_recovery_at=CURRENT_TIMESTAMP(3),recovery_token=NULL,recovery_until=NULL WHERE request_id=? AND state='COMMITTED' AND recovery_state='DEAD'", reason, key)

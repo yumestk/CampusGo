@@ -1,15 +1,14 @@
 package mysql
 
 import (
-	"github.com/yumestk/CampusGo/internal/contracts"
-
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
-	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 
 	"github.com/yumestk/CampusGo/internal/auth"
+	"github.com/yumestk/CampusGo/internal/contracts"
+	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 )
 

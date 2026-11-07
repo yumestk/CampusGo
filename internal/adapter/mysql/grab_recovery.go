@@ -1,8 +1,6 @@
 package mysql
 
 import (
-	"github.com/yumestk/CampusGo/internal/contracts"
-
 	"context"
 	"database/sql"
 	"errors"
@@ -10,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+
+	"github.com/yumestk/CampusGo/internal/contracts"
 )
 
 func enqueueRepair(ctx context.Context, tx *sql.Tx, campus, id int64, event, kind string, request *int64, delay int) error {

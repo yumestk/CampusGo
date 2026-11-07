@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
 	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
 )
 
@@ -48,7 +49,7 @@ func (g *CreditStore) recalibrate(ctx context.Context, id int64, dueOnly bool) e
 			return nil
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO credit_score(user_id,score,version,last_calibrated_at) SELECT ?,LEAST(100,GREATEST(0,60+COALESCE(SUM(delta),0))),1,CURRENT_TIMESTAMP(3) FROM credit_event WHERE user_id=? AND created_at>=TIMESTAMPADD(DAY,-30,CURRENT_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE score=VALUES(score),version=version+1,last_calibrated_at=CURRENT_TIMESTAMP(3)`, id, id)
+	_, err = tx.ExecContext(ctx, `INSERT INTO credit_score(user_id,score,version,last_calibrated_at) SELECT ?,LEAST(?,GREATEST(?,?+COALESCE(SUM(delta),0))),1,CURRENT_TIMESTAMP(3) FROM credit_event WHERE user_id=? AND created_at>=TIMESTAMPADD(DAY,?,CURRENT_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE score=VALUES(score),version=version+1,last_calibrated_at=CURRENT_TIMESTAMP(3)`, id, creditdomain.Maximum, creditdomain.Minimum, creditdomain.Base, id, -creditdomain.WindowDays)
 	if err != nil {
 		return err
 	}

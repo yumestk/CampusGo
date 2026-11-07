@@ -2,14 +2,17 @@ package httpapi
 
 import (
 	"database/sql"
+	"strconv"
+
 	"github.com/gin-gonic/gin"
+
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/notify"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
-	"strconv"
 )
 
-func registerNotifications(api *gin.RouterGroup, db *sql.DB) {
+func registerNotifications(api *gin.RouterGroup, db *sql.DB, service *application.Notifications) {
 	api.GET("/notifications", func(c *gin.Context) {
 		size, err := strconv.Atoi(c.DefaultQuery("size", "20"))
 		if err != nil {
@@ -34,7 +37,7 @@ func registerNotifications(api *gin.RouterGroup, db *sql.DB) {
 	api.POST("/notifications/:id/read", func(c *gin.Context) {
 		id, err := positiveID(c.Param("id"))
 		if err == nil {
-			err = notify.Read(c.Request.Context(), db, c.MustGet("user").(auth.User).ID, id)
+			err = service.MarkRead(c.Request.Context(), c.MustGet("user").(auth.User), id)
 		}
 		if err != nil {
 			fail(c, err)

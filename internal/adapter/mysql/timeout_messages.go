@@ -1,17 +1,15 @@
 package mysql
 
 import (
-	"github.com/yumestk/CampusGo/internal/contracts"
-
 	"context"
 	"database/sql"
-
 	"fmt"
-
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/yumestk/CampusGo/internal/contracts"
 )
 
 const messageColumns = "topic,id,campus_id,errand_id,msg_key,payload,deliver_at,state,retry_count,replay_count,COALESCE(worker_token,''),COALESCE(last_error,''),COALESCE(last_replay_reason,'')"

@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-
 	"time"
 
 	"github.com/yumestk/CampusGo/internal/auth"

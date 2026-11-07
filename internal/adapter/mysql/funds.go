@@ -6,37 +6,17 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 
 	"github.com/yumestk/CampusGo/internal/application"
+	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/contracts"
 	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 	walletdomain "github.com/yumestk/CampusGo/internal/domain/wallet"
-	"github.com/yumestk/CampusGo/internal/platform/idgen"
-
-	"sort"
-
-	"github.com/google/uuid"
-	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
+	"github.com/yumestk/CampusGo/internal/platform/idgen"
 )
 
-// Send returns only after the broker confirms the half message. Resolution is
-// separate: an uncertain SQL COMMIT must leave the message for durable checking.
-
-func autoUUID(s string) string      { return uuid.NewSHA1(uuid.NameSpaceOID, []byte(s)).String() }
-func Commission(amount int64) int64 { return walletdomain.Commission(amount) }
-func validFundCommand(u auth.User, c FundCommand) bool {
-	if c.ErrandID <= 0 || c.Round < 0 || c.Round > 2147483647 {
-		return false
-	}
-	switch c.Action {
-	case "SETTLE", "CANCEL", "ARBITRATE_RUNNER", "ARBITRATE_PUBLISHER":
-		return u.ID > 0
-	case "AUTO_SETTLE":
-		return u.ID == -1
-	}
-	return false
-}
 func fundStatus(kind string) string {
 	return taskdomain.FundStatus(kind)
 }
@@ -61,7 +41,7 @@ func authorizeFund(ctx context.Context, tx *sql.Tx, u auth.User, c Card, action 
 	return nil
 }
 func (f *FundStore) Result(ctx context.Context, u auth.User, key string) (FundResult, error) {
-	if !ValidRequestKey(key) {
+	if !contracts.ValidRequestKey(key) {
 		return FundResult{}, fault.New("INVALID_REQUEST", 400)
 	}
 	r := FundResult{RequestID: key}
@@ -84,16 +64,6 @@ func (f *FundStore) Result(ctx context.Context, u auth.User, key string) (FundRe
 	return r, nil
 }
 
-func fundOutcome(r FundResult) (FundResult, error) {
-	if r.State == "ABORTED" {
-		code := r.ErrorCode
-		if code == "" {
-			code = "FUND_EXPIRED"
-		}
-		return r, fault.New(code, 409)
-	}
-	return r, nil
-}
 func (f *FundStore) Prepare(ctx context.Context, u auth.User, key string, c FundCommand, hash []byte) (FundEvent, *FundResult, error) {
 	tx, err := f.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {

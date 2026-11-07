@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/yumestk/CampusGo/internal/contracts"
 	"io"
 	"strconv"
 	"time"
+
+	"github.com/yumestk/CampusGo/internal/contracts"
 )
 
 type TimeoutStore interface {

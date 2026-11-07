@@ -2,8 +2,9 @@ package application
 
 import (
 	"context"
+
 	"github.com/yumestk/CampusGo/internal/contracts"
-	"github.com/yumestk/CampusGo/internal/platform/fault"
+	fault "github.com/yumestk/CampusGo/internal/failure"
 )
 
 type TaskTransitions interface {

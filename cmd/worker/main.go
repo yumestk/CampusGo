@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/yumestk/CampusGo/internal/application"
 	"log/slog"
 	"net/http"
 	"os"
@@ -14,7 +13,9 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+
+	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/fundmq"
 	"github.com/yumestk/CampusGo/internal/platform/config"
 	"github.com/yumestk/CampusGo/internal/platform/database"
@@ -66,15 +67,15 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	g := &errand.TaskStore{DB: db, Redis: cache, IDs: ids, Namespace: name}
+	g := &mysqlstore.TaskStore{DB: db, Redis: cache, IDs: ids, Namespace: name}
 	registry := telemetry.NewRegistry("worker")
 	mq := &fundmq.Client{Namespace: name}
-	funds := &application.Funds{Store: &errand.FundStore{DB: db, IDs: ids}, Send: mq.Send, Record: errand.NewFundRecorder(registry)}
+	funds := &application.Funds{Store: &mysqlstore.FundStore{DB: db, IDs: ids}, Send: mq.Send, Record: mysqlstore.NewFundRecorder(registry)}
 	timeouts := &application.Timeouts{Store: g, Candidates: g}
 	var workers sync.WaitGroup
 	onError := func(err error) { logger.Error("worker operation failed", "cause_type", fmt.Sprintf("%T", err)) }
 	for _, run := range []func(){func() { mq.Run(ctx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), true, onError) }, func() { funds.Run(ctx, onError) }, func() {
-		application.RunEvery(ctx, time.Minute, (&errand.CreditStore{DB: db}).CalibrateDueCredit, onError)
+		application.RunEvery(ctx, time.Minute, (&mysqlstore.CreditStore{DB: db}).CalibrateDueCredit, onError)
 	}, func() { (&application.Repairs{Store: g}).RunRecovery(ctx, onError) }, func() { timeouts.RunTimeoutScan(ctx, onError) }, func() {
 		timeoutmq.Run(ctx, name, &application.Messages{Store: g}, timeouts, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), onError, funds)
 	}} {

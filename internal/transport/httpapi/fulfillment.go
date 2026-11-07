@@ -1,15 +1,17 @@
 package httpapi
 
 import (
+	"strconv"
+
 	"github.com/gin-gonic/gin"
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+
+	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
-	"strconv"
 )
 
-func registerFulfillment(api *gin.RouterGroup, g *application.Lifecycle, f *application.Funds, credit *errand.CreditQuery) {
+func registerFulfillment(api *gin.RouterGroup, g *application.Lifecycle, f *application.Funds, credit CreditReader) {
 	api.POST("/errands/:id/actions", func(c *gin.Context) {
 		id, err := positiveID(c.Param("id"))
 		if err != nil {
@@ -43,7 +45,7 @@ func registerFulfillment(api *gin.RouterGroup, g *application.Lifecycle, f *appl
 				fail(c, fault.New("INVALID_REQUEST", 400))
 				return
 			}
-			r, e := f.Execute(c.Request.Context(), u, keys[0], errand.FundCommand{ErrandID: id, Round: *b.Round, Action: b.Action})
+			r, e := f.Execute(c.Request.Context(), u, keys[0], mysqlstore.FundCommand{ErrandID: id, Round: *b.Round, Action: b.Action})
 			if e != nil {
 				fail(c, e)
 				return

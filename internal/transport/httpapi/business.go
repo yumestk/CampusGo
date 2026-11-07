@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/yumestk/CampusGo/internal/application"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,8 +16,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+
+	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
+	"github.com/yumestk/CampusGo/internal/contracts"
 	"github.com/yumestk/CampusGo/internal/notify"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"github.com/yumestk/CampusGo/internal/transport/wire"
@@ -81,7 +83,7 @@ func bearer(c *gin.Context) string {
 	}
 	return parts[1]
 }
-func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, services BusinessServices) {
+func RegisterBusiness(router *gin.Engine, s *auth.Service, q mysqlstore.Query, services BusinessServices) {
 	api := router.Group("/api")
 	api.Use(func(c *gin.Context) {
 		if s.Config.RequireGateway && (len(c.Request.Header.Values("X-CampusGo-Gateway")) != 1 || subtle.ConstantTimeCompare([]byte(c.GetHeader("X-CampusGo-Gateway")), []byte(s.Config.GatewaySecret)) != 1) {
@@ -188,7 +190,7 @@ func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, servi
 		c.Set("user", u)
 		c.Next()
 	})
-	registerNotifications(protected, q.DB)
+	registerNotifications(protected, q.DB, services.Notifications)
 	protected.GET("/users/me", func(c *gin.Context) { ok(c, c.MustGet("user")) })
 
 	registerFunds(protected, services.Publisher, q.DB)
@@ -198,7 +200,7 @@ func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, servi
 	}
 	list := func(c *gin.Context, mine bool) {
 		u := c.MustGet("user").(auth.User)
-		o := errand.ListOptions{CampusID: u.CampusID, Status: c.DefaultQuery("status", "PUBLISHED"), Size: 20}
+		o := mysqlstore.ListOptions{CampusID: u.CampusID, Status: c.DefaultQuery("status", "PUBLISHED"), Size: 20}
 		var err error
 		if v, exists := c.GetQuery("campusId"); exists {
 			o.CampusID, err = strconv.ParseInt(v, 10, 64)
@@ -220,7 +222,7 @@ func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, servi
 		_, cursorPresent := c.Request.URL.Query()["cursor"]
 		present = present || cursorPresent
 		if cursor != "" {
-			o.BeforeTime, o.Before, err = errand.ParseCursor(cursor)
+			o.BeforeTime, o.Before, err = mysqlstore.ParseCursor(cursor)
 			if err != nil {
 				fail(c, fault.New("INVALID_REQUEST", 400))
 				return
@@ -295,9 +297,15 @@ func RegisterRealtime(router *gin.Engine, s *auth.Service, h *notify.Hub) {
 // BusinessServices is assembled explicitly by cmd/api and the HTTP fixtures.
 // Controllers never construct a writer or silently substitute missing storage.
 type BusinessServices struct {
-	Publisher *application.Publisher
-	Grab      *application.Grab
-	Lifecycle *application.Lifecycle
-	Funds     *application.Funds
-	Credit    *errand.CreditQuery
+	Notifications *application.Notifications
+	Publisher     *application.Publisher
+	Grab          *application.Grab
+	Lifecycle     *application.Lifecycle
+	Funds         *application.Funds
+	Credit        CreditReader
+}
+
+type CreditReader interface {
+	CreditSelf(context.Context, auth.User) (contracts.CreditProfile, error)
+	CreditRanking(context.Context, auth.User, int64, int) ([]contracts.CreditRank, error)
 }

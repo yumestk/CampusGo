@@ -2,7 +2,8 @@ package httpapi
 
 import (
 	"github.com/gin-gonic/gin"
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+
+	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
@@ -51,7 +52,7 @@ func registerGrab(api *gin.RouterGroup, g *application.Grab, lifecycle *applicat
 			fail(c, fault.New("INVALID_REQUEST", 400))
 			return
 		}
-		r, err := g.Grab(c.Request.Context(), c.MustGet("user").(auth.User), keys[0], errand.GrabCommand{ErrandID: id, ExpectedRound: *body.ExpectedRound})
+		r, err := g.Grab(c.Request.Context(), c.MustGet("user").(auth.User), keys[0], mysqlstore.GrabCommand{ErrandID: id, ExpectedRound: *body.ExpectedRound})
 		if err != nil {
 			fail(c, err)
 			return
@@ -72,7 +73,7 @@ func registerGrab(api *gin.RouterGroup, g *application.Grab, lifecycle *applicat
 		grabResponse(c, r)
 	})
 }
-func grabResponse(c *gin.Context, r errand.GrabResult) {
+func grabResponse(c *gin.Context, r mysqlstore.GrabResult) {
 	if r.State == "PROCESSING" || r.State == "NOT_OBSERVED" {
 		c.Header("Retry-After", "1")
 		c.JSON(202, result{"OK", "结果处理中", r})

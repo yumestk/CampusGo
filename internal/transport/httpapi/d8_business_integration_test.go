@@ -16,7 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+
+	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
@@ -44,7 +45,7 @@ func TestIntegrationD8Business(t *testing.T) {
 	t.Cleanup(func() { r.Close() })
 	ids, _ := idgen.New(1022)
 	namespace := "d8-" + uuid.NewString()
-	g := &errand.TaskStore{DB: db, Redis: r, IDs: ids, Namespace: namespace}
+	g := &mysqlstore.TaskStore{DB: db, Redis: r, IDs: ids, Namespace: namespace}
 	exec := func(t *testing.T, q string, args ...any) {
 		t.Helper()
 		if _, e := db.ExecContext(ctx, q, args...); e != nil {
@@ -124,7 +125,7 @@ func TestIntegrationD8Business(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			s := &auth.Service{DB: db, Redis: r, Config: auth.Config{Environment: "test", Namespace: namespace + mode, Demo: true, Mode: mode, SessionTTL: time.Hour, JWTSecret: "d8-business-signing-secret-at-least-32-bytes", RefreshTTL: time.Hour}}
 			router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
-			registerTestBusiness(router, s, errand.Query{DB: db}, &errand.PublishStore{DB: db, IDs: ids}, g)
+			registerTestBusiness(router, s, mysqlstore.Query{DB: db}, &mysqlstore.PublishStore{DB: db, IDs: ids}, g)
 			tokens := map[int64]string{}
 			for _, id := range []int64{1001, 2001, 2002, 9001} {
 				session, e := s.DemoLogin(ctx, id)
@@ -166,7 +167,7 @@ func TestIntegrationD8Business(t *testing.T) {
 							continue
 						}
 						var body struct {
-							Data errand.Card `json:"data"`
+							Data mysqlstore.Card `json:"data"`
 						}
 						if e := json.Unmarshal(w.Body.Bytes(), &body); e != nil {
 							t.Fatal(e)
@@ -183,7 +184,7 @@ func TestIntegrationD8Business(t *testing.T) {
 			}
 
 			t.Run("query_cursor_offset_role_and_campus_contract", func(t *testing.T) {
-				pageOf := func(path string) errand.Page {
+				pageOf := func(path string) mysqlstore.Page {
 					t.Helper()
 					w := get(path, tokens[1001])
 					var body struct {
@@ -192,7 +193,7 @@ func TestIntegrationD8Business(t *testing.T) {
 					if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil {
 						t.Fatal(w.Code, w.Body.String())
 					}
-					var page errand.Page
+					var page mysqlstore.Page
 					var e error
 					if len(body.Data) > 0 && body.Data[0] == '[' {
 						e = json.Unmarshal(body.Data, &page.Items)
@@ -216,7 +217,7 @@ func TestIntegrationD8Business(t *testing.T) {
 				for _, card := range append(first.Items, next.Items...) {
 					w := get(fmt.Sprintf("/api/errands/%d", card.ID), tokens[1001])
 					var body struct {
-						Data errand.Card `json:"data"`
+						Data mysqlstore.Card `json:"data"`
 					}
 					if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &body) != nil || !reflect.DeepEqual(card.AvailableActions, body.Data.AvailableActions) {
 						t.Fatal("list/detail actions drifted")
@@ -232,7 +233,7 @@ func TestIntegrationD8Business(t *testing.T) {
 				}
 			})
 			t.Run("production_admission_precedes_request_registration", func(t *testing.T) {
-				g.Limits = errand.NewGrabLimits(r, namespace+mode)
+				g.Limits = mysqlstore.NewGrabLimits(r, namespace+mode)
 				defer func() { g.Limits = nil }()
 				id := newID()
 				taskIDs = append(taskIDs, id)
@@ -266,7 +267,7 @@ func TestIntegrationD8Business(t *testing.T) {
 				for _, path := range []string{"/api/credit", "/api/credit/self"} {
 					w := get(path, tokens[1001])
 					var body struct {
-						Data errand.CreditProfile `json:"data"`
+						Data mysqlstore.CreditProfile `json:"data"`
 					}
 					if json.Unmarshal(w.Body.Bytes(), &body) != nil || w.Code != 200 {
 						t.Fatal(w.Code, w.Body.String())
@@ -281,7 +282,7 @@ func TestIntegrationD8Business(t *testing.T) {
 				}
 				w := get("/api/credit/self?userId=1001", tokens[2002])
 				var body struct {
-					Data errand.CreditProfile `json:"data"`
+					Data mysqlstore.CreditProfile `json:"data"`
 				}
 				if json.Unmarshal(w.Body.Bytes(), &body) != nil || len(body.Data.Events) != 1 || body.Data.Events[0].RefID != otherRef {
 					t.Fatal("credit identity leaked", w.Body.String())
@@ -293,7 +294,7 @@ func TestIntegrationD8Business(t *testing.T) {
 				for range 2 {
 					w := get("/api/credit/ranking?limit=2", tokens[1001])
 					var body struct {
-						Data []errand.CreditRank `json:"data"`
+						Data []mysqlstore.CreditRank `json:"data"`
 					}
 					if json.Unmarshal(w.Body.Bytes(), &body) != nil || w.Code != 200 || len(body.Data) != 2 {
 						t.Fatal(w.Code, w.Body.String())

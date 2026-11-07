@@ -2,7 +2,9 @@ package mysql
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
@@ -121,6 +124,29 @@ func TestIntegrationPublishFunds(t *testing.T) {
 		return b
 	}
 
+	t.Run("pre_refactor_persisted_publish_replay", func(t *testing.T) {
+		u := newUser(10000)
+		key := uuid.NewString()
+		raw := legacyTaskCommand(t, "publish")
+		var c PublishCommand
+		if e := json.Unmarshal([]byte(raw), &c); e != nil {
+			t.Fatal(e)
+		}
+		r, e := p.Publish(ctx, u, key, c)
+		if e != nil {
+			t.Fatal(e)
+		}
+		hash := sha256.Sum256([]byte(raw))
+		if _, e = db.Exec("UPDATE publish_request SET fingerprint=? WHERE publisher_id=? AND request_key=?", hash[:], u.ID, key); e != nil {
+			t.Fatal(e)
+		}
+		before := balance(u)
+		replay, e := p.Publish(ctx, u, key, c)
+		if e != nil || replay.ErrandID == nil || *replay.ErrandID != *r.ErrandID || balance(u) != before {
+			t.Fatal("old committed publish replay changed effects", replay, e)
+		}
+		check()
+	})
 	t.Run("atomic_publish_receipt_and_seed_does_not_refill", func(t *testing.T) {
 		u := newUser(10000)
 		key := uuid.NewString()

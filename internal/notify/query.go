@@ -80,3 +80,11 @@ func Read(ctx context.Context, db *sql.DB, user, id int64) error {
 	}
 	return nil
 }
+
+// ReadStore owns the idempotent acknowledgement; content and receipt insertion
+// remain part of the separate atomic funds receiver transaction.
+type ReadStore struct{ DB *sql.DB }
+
+func (s ReadStore) MarkNoticeRead(ctx context.Context, user, id int64) error {
+	return Read(ctx, s.DB, user, id)
+}

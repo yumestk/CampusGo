@@ -1,24 +1,25 @@
 package application
 
 import (
-	"github.com/yumestk/CampusGo/internal/domain/notification"
-
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/google/uuid"
-	"github.com/yumestk/CampusGo/internal/contracts"
-	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
-	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
-	walletdomain "github.com/yumestk/CampusGo/internal/domain/wallet"
-	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"io"
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/yumestk/CampusGo/internal/contracts"
+	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
+	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
+	"github.com/yumestk/CampusGo/internal/domain/notification"
+	walletdomain "github.com/yumestk/CampusGo/internal/domain/wallet"
+	fault "github.com/yumestk/CampusGo/internal/failure"
 )
 
 type FundCommand = contracts.FundCommand

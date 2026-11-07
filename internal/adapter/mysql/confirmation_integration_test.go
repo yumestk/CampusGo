@@ -6,15 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	rmq "github.com/apache/rocketmq-clients/golang/v5"
-	"github.com/apache/rocketmq-clients/golang/v5/credentials"
-	v2 "github.com/apache/rocketmq-clients/golang/v5/protocol/v2"
-	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
-	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/platform/database"
-	"github.com/yumestk/CampusGo/internal/platform/idgen"
-	"github.com/yumestk/CampusGo/internal/platform/rediscache"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +13,17 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	rmq "github.com/apache/rocketmq-clients/golang/v5"
+	"github.com/apache/rocketmq-clients/golang/v5/credentials"
+	v2 "github.com/apache/rocketmq-clients/golang/v5/protocol/v2"
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+
+	"github.com/yumestk/CampusGo/internal/auth"
+	"github.com/yumestk/CampusGo/internal/platform/database"
+	"github.com/yumestk/CampusGo/internal/platform/idgen"
+	"github.com/yumestk/CampusGo/internal/platform/rediscache"
 )
 
 func TestIntegrationD4(t *testing.T) {

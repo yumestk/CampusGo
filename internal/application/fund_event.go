@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+
 	"github.com/yumestk/CampusGo/internal/contracts"
 	walletdomain "github.com/yumestk/CampusGo/internal/domain/wallet"
-	"io"
 )
 
 func DecodeFundEvent(body []byte) (FundEvent, error) {

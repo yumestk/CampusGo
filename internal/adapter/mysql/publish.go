@@ -1,20 +1,15 @@
 package mysql
 
 import (
-	"github.com/yumestk/CampusGo/internal/contracts"
-
 	"bytes"
 	"context"
-
 	"database/sql"
-
 	"errors"
 	"fmt"
-
 	"math"
 
-	"github.com/google/uuid"
 	"github.com/yumestk/CampusGo/internal/auth"
+	"github.com/yumestk/CampusGo/internal/contracts"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
 )
@@ -24,11 +19,6 @@ type PublishStore struct {
 	IDs          *idgen.Generator
 	beforeCommit func(*sql.Tx) error
 	commit       func(*sql.Tx) error
-}
-
-func ValidRequestKey(key string) bool {
-	parsed, err := uuid.Parse(key)
-	return err == nil && parsed != uuid.Nil && parsed.String() == key
 }
 
 func scanResult(row *sql.Row, key string) (PublishResult, []byte, error) {
@@ -50,7 +40,7 @@ const resultColumns = "fingerprint,state,errand_id,reward_amount,error_code"
 
 // A missing committed row is not proof of rollback: an earlier COMMIT may still be in flight.
 func (p *PublishStore) Result(ctx context.Context, u auth.User, key string) (PublishResult, error) {
-	if !ValidRequestKey(key) {
+	if !contracts.ValidRequestKey(key) {
 		return PublishResult{}, fault.New("INVALID_REQUEST", 400)
 	}
 	r, _, err := scanResult(p.DB.QueryRowContext(ctx, "SELECT "+resultColumns+" FROM publish_request WHERE publisher_id=? AND request_key=?", u.ID, key), key)

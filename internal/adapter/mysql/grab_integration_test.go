@@ -3,6 +3,7 @@ package mysql
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
+
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
@@ -160,6 +162,28 @@ func TestIntegrationGrab(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	t.Run("pre_refactor_persisted_grab_request_resume", func(t *testing.T) {
+		id := newTask()
+		key := uuid.NewString()
+		raw := strings.ReplaceAll(legacyTaskCommand(t, "grab"), "9007199254741001", fmt.Sprint(id))
+		hash := sha256.Sum256([]byte(raw))
+		requestID := newID()
+		execSQL("INSERT INTO grab_request(id,campus_id,runner_id,request_key,errand_id,fingerprint,base_version,round,reservation_token,lease_until) VALUES(?,1,?,?,?,?,1,0,?,TIMESTAMPADD(SECOND,30,CURRENT_TIMESTAMP(3)))", requestID, runner.ID, key, id, hash[:], uuid.NewString())
+		var c GrabCommand
+		if e := json.Unmarshal([]byte(raw), &c); e != nil {
+			t.Fatal(e)
+		}
+		r, e := g.Grab(ctx, runner, key, c)
+		if e != nil || r.State != "PROCESSING" {
+			t.Fatal("old in-flight request must stay provisional", r, e)
+		}
+		expire(id)
+		recoverAll()
+		r, e = g.Grab(ctx, runner, key, c)
+		if e != nil || r.State != "EXPIRED" || count("SELECT COUNT(*) FROM grab_request WHERE id=?", requestID) != 1 || count("SELECT COUNT(*) FROM grab_record WHERE errand_id=?", id) != 0 {
+			t.Fatal("old expired request replay was re-executed", r, e)
+		}
+	})
 	t.Run("same_round_48_runners_one_SQL_winner", func(t *testing.T) {
 		id := newTask()
 		users := []auth.User{}
