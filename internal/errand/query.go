@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 	"strconv"
 	"strings"
 	"time"
@@ -95,39 +96,7 @@ func (o ListOptions) Validate(viewer auth.User) error {
 	return nil
 }
 func decorate(c *Card, viewer auth.User) {
-	c.AvailableActions = []string{}
-	if c.CampusID == viewer.CampusID && (c.Status == "PUBLISHED" || (c.Status == "LOCKED" && (c.GrabberID == nil || *c.GrabberID != viewer.ID))) && c.PublisherID != viewer.ID && (viewer.Role == "STUDENT" || viewer.Role == "ARBITRATOR") {
-		c.AvailableActions = append(c.AvailableActions, "GRAB")
-	}
-	if c.CampusID == viewer.CampusID && c.Status == "LOCKED" && c.GrabberID != nil && *c.GrabberID == viewer.ID {
-		c.AvailableActions = append(c.AvailableActions, "CONFIRM")
-	}
-	if c.CampusID == viewer.CampusID {
-		runner := c.GrabberID != nil && *c.GrabberID == viewer.ID
-		if runner && c.Status == "ACCEPTED" {
-			c.AvailableActions = append(c.AvailableActions, "PICK_UP")
-		}
-		if runner && c.Status == "PICKED_UP" {
-			c.AvailableActions = append(c.AvailableActions, "DELIVER")
-		}
-		if (runner || c.PublisherID == viewer.ID) && (c.Status == "ACCEPTED" || c.Status == "PICKED_UP" || c.Status == "DELIVERED") {
-			c.AvailableActions = append(c.AvailableActions, "DISPUTE")
-		}
-		if c.PublisherID == viewer.ID {
-			if c.Status == "DELIVERED" {
-				c.AvailableActions = append(c.AvailableActions, "SETTLE")
-			}
-			if c.Status == "DRAFT" {
-				c.AvailableActions = append(c.AvailableActions, "CANCEL_DRAFT")
-			}
-			if c.Status == "PUBLISHED" {
-				c.AvailableActions = append(c.AvailableActions, "CANCEL")
-			}
-		}
-		if viewer.Role == "ARBITRATOR" && c.Status == "DISPUTED" {
-			c.AvailableActions = append(c.AvailableActions, "ARBITRATE_RUNNER", "ARBITRATE_PUBLISHER")
-		}
-	}
+	c.AvailableActions = taskModel(*c).Actions(taskActor(viewer))
 	c.Role = "VIEWER"
 	if c.GrabberID != nil && *c.GrabberID == viewer.ID {
 		c.Role = "CURRENT_RUNNER"
@@ -140,7 +109,7 @@ func decorate(c *Card, viewer auth.User) {
 	}
 }
 func Visible(c Card, viewer auth.User) bool {
-	return c.CampusID == viewer.CampusID && (c.Status != "DRAFT" || c.PublisherID == viewer.ID || viewer.Role == "ARBITRATOR")
+	return taskModel(c).Visible(taskActor(viewer))
 }
 
 type scanner interface{ Scan(...any) error }
@@ -239,4 +208,15 @@ func (q Query) Timeline(ctx context.Context, viewer auth.User, id int64) ([]Stat
 		items = append(items, c)
 	}
 	return items, fault.Dependency(rows.Err())
+}
+
+func taskActor(u auth.User) taskdomain.Actor {
+	return taskdomain.Actor{ID: u.ID, CampusID: u.CampusID, Role: u.Role}
+}
+func taskModel(c Card) taskdomain.Task {
+	runner := int64(0)
+	if c.GrabberID != nil {
+		runner = *c.GrabberID
+	}
+	return taskdomain.Restore(taskdomain.Snapshot{ID: c.ID, CampusID: c.CampusID, PublisherID: c.PublisherID, RunnerID: runner, Version: c.Version, Round: c.Round, Slots: c.SlotTotal, Status: c.Status})
 }

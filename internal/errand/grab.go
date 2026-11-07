@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 	"time"
 
 	"github.com/google/uuid"
@@ -208,33 +209,16 @@ func (g *Grabber) grabEligibility(ctx context.Context, q rowQuery, u auth.User, 
 	if err != nil {
 		return "", err
 	}
-	if campus != u.CampusID || publisher == u.ID {
-		return "ERRAND_NOT_GRABBABLE", nil
-	}
-	if round != c.ExpectedRound || currentVersion != version {
-		return "STALE_VERSION", nil
-	}
-	if grabber.Valid && grabber.Int64 == u.ID {
-		return "ALREADY_GRABBED", nil
-	}
-	if status != "PUBLISHED" || slot != 1 {
-		if status == "LOCKED" {
-			return "SLOT_FULL", nil
-		}
-		return "ERRAND_NOT_GRABBABLE", nil
+	task := taskdomain.Restore(taskdomain.Snapshot{CampusID: campus, PublisherID: publisher, RunnerID: grabber.Int64, Version: currentVersion, Round: round, Slots: slot, Status: status})
+	if reason := task.Grab(taskActor(u), c.ExpectedRound, version); reason != "" {
+		return reason, nil
 	}
 	var score, ongoing int
 	err = q.QueryRowContext(ctx, "SELECT COALESCE((SELECT score FROM credit_score WHERE user_id=?),60),(SELECT COUNT(*) FROM errand WHERE grabber_id=? AND status IN ('ACCEPTED','PICKED_UP'))", u.ID, u.ID).Scan(&score, &ongoing)
 	if err != nil {
 		return "", err
 	}
-	if score < 40 {
-		return "CREDIT_TOO_LOW", nil
-	}
-	if ongoing >= 5 {
-		return "TOO_MANY_ONGOING", nil
-	}
-	return "", nil
+	return taskdomain.Eligible(score, ongoing), nil
 }
 func (g *Grabber) commitGrab(ctx context.Context, u auth.User, r grabRequest, hook func(string)) (GrabResult, error) {
 	tx, err := g.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})

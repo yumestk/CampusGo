@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
 	"strconv"
 	"time"
 
@@ -32,7 +33,7 @@ type CreditRank struct {
 }
 
 func (g *Grabber) CreditSelf(ctx context.Context, u auth.User) (CreditProfile, error) {
-	p := CreditProfile{Score: 60, WindowDays: 30, Events: []CreditEvent{}}
+	p := CreditProfile{Score: creditdomain.Base, WindowDays: creditdomain.WindowDays, Events: []CreditEvent{}}
 	tx, err := g.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return p, fault.Dependency(err)
@@ -52,7 +53,7 @@ func (g *Grabber) CreditSelf(ctx context.Context, u auth.User) (CreditProfile, e
 			rows.Close()
 			return p, fault.Dependency(err)
 		}
-		e.Description = map[string]string{"SETTLE": "完成结算", "GRAB_TIMEOUT_REVERT": "抢中后超时未确认", "DISPUTE_LOSE": "争议败诉"}[e.Type]
+		e.Description = creditdomain.Description(e.Type)
 		p.Events = append(p.Events, e)
 	}
 	err = rows.Err()

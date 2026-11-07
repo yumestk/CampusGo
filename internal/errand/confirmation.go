@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
@@ -28,13 +29,7 @@ func runnerEligible(ctx context.Context, tx *sql.Tx, id int64) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if score < 40 {
-		return "CREDIT_TOO_LOW", nil
-	}
-	if ongoing >= 5 {
-		return "TOO_MANY_ONGOING", nil
-	}
-	return "", nil
+	return taskdomain.Eligible(score, ongoing), nil
 }
 func (g *Grabber) Confirm(ctx context.Context, u auth.User, id int64, round int) (Card, error) {
 	if id <= 0 || round < 0 || round > 2147483647 {
@@ -59,11 +54,8 @@ func (g *Grabber) Confirm(ctx context.Context, u auth.User, id int64, round int)
 	if err != nil {
 		return Card{}, fault.Dependency(err)
 	}
-	if c.Round != round {
-		return Card{}, fault.New("STALE_VERSION", 409)
-	}
-	if c.GrabberID == nil || *c.GrabberID != u.ID {
-		return Card{}, fault.New("NOT_CURRENT_GRABBER", 409)
+	if code := taskModel(c).Confirm(taskActor(u), round); code != "" {
+		return Card{}, fault.New(code, 409)
 	}
 	if c.Status == "ACCEPTED" {
 		decorate(&c, u)

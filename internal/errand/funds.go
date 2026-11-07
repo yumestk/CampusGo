@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
+	walletdomain "github.com/yumestk/CampusGo/internal/domain/wallet"
 	"math"
 	"sort"
 
@@ -51,7 +53,7 @@ type Funds struct {
 }
 
 func autoUUID(s string) string      { return uuid.NewSHA1(uuid.NameSpaceOID, []byte(s)).String() }
-func Commission(amount int64) int64 { return amount/10000*500 + (amount%10000)*500/10000 }
+func Commission(amount int64) int64 { return walletdomain.Commission(amount) }
 func validFundCommand(u auth.User, c FundCommand) bool {
 	if c.ErrandID <= 0 || c.Round < 0 || c.Round > 2147483647 {
 		return false
@@ -65,41 +67,16 @@ func validFundCommand(u auth.User, c FundCommand) bool {
 	return false
 }
 func fundStatus(kind string) string {
-	switch kind {
-	case "CANCEL":
-		return "CANCELLED"
-	case "ARBITRATE_PUBLISHER":
-		return "REFUNDED"
-	default:
-		return "SETTLED"
-	}
+	return taskdomain.FundStatus(kind)
 }
+
 func authorizeFund(ctx context.Context, tx *sql.Tx, u auth.User, c Card, action string) error {
-	switch action {
-	case "SETTLE", "CANCEL":
-		if u.ID != c.PublisherID {
-			return fault.New("FORBIDDEN", 403)
+	if code := taskModel(c).AuthorizeFund(taskActor(u), action); code != "" {
+		status := 409
+		if code == "FORBIDDEN" {
+			status = 403
 		}
-	case "ARBITRATE_RUNNER", "ARBITRATE_PUBLISHER":
-		if u.Role != "ARBITRATOR" {
-			return fault.New("FORBIDDEN", 403)
-		}
-	case "AUTO_SETTLE":
-		if u.ID != -1 {
-			return fault.New("FORBIDDEN", 403)
-		}
-	}
-	allowed := false
-	switch action {
-	case "CANCEL":
-		allowed = c.Status == "PUBLISHED"
-	case "SETTLE", "AUTO_SETTLE":
-		allowed = c.Status == "DELIVERED"
-	case "ARBITRATE_RUNNER", "ARBITRATE_PUBLISHER":
-		allowed = c.Status == "DISPUTED"
-	}
-	if !allowed {
-		return fault.New("INVALID_STATUS", 409)
+		return fault.New(code, status)
 	}
 	if action == "AUTO_SETTLE" {
 		var due bool
@@ -255,7 +232,7 @@ func (f *Funds) prepare(ctx context.Context, u auth.User, key string, c FundComm
 		if runner <= 0 {
 			return event, nil, fault.New("INVALID_STATUS", 409)
 		}
-		event.Commission = Commission(event.Amount)
+		event.Commission = walletdomain.Allocate(event.Amount, true).Commission
 	}
 	payload, _ = json.Marshal(event)
 	result, err := tx.ExecContext(ctx, `INSERT INTO fund_request(request_id,actor_id,campus_id,errand_id,fingerprint,payload,expires_at,next_recovery_at) VALUES (?,?,?,?,?,?,TIMESTAMPADD(SECOND,60,CURRENT_TIMESTAMP(3)),TIMESTAMPADD(SECOND,120,CURRENT_TIMESTAMP(3))) ON DUPLICATE KEY UPDATE request_id=request_id`, key, u.ID, u.CampusID, c.ErrandID, hash, payload)
@@ -435,17 +412,12 @@ func (f *Funds) post(ctx context.Context, tx *sql.Tx, e FundEvent) error {
 		if a.owner != leg.owner || a.kind != leg.kind || a.version == math.MaxInt64 {
 			return fmt.Errorf("wallet identity/sequence invariant")
 		}
-		after := a.available
-		if leg.direction == "DEBIT" {
-			if after < leg.amount {
-				return fmt.Errorf("escrow underfunded")
+		after, code := walletdomain.Apply(a.available, a.version, leg.amount, leg.direction == "DEBIT")
+		if code != "" {
+			if code == "BALANCE_LIMIT" {
+				return fault.New(code, 409)
 			}
-			after -= leg.amount
-		} else {
-			if after > math.MaxInt64-leg.amount {
-				return fault.New("BALANCE_LIMIT", 409)
-			}
-			after += leg.amount
+			return fmt.Errorf("wallet invariant: %s", code)
 		}
 		if _, err := tx.ExecContext(ctx, "UPDATE wallet_account SET available=?,version=version+1 WHERE id=?", after, leg.id); err != nil {
 			return err

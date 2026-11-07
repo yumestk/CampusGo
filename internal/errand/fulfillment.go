@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
 	"io"
 	"strconv"
 	"time"
@@ -60,33 +61,13 @@ func (g *Grabber) Fulfill(ctx context.Context, u auth.User, id int64, round int,
 	if c.Round != round {
 		return Card{}, fault.New("STALE_VERSION", 409)
 	}
-	runner := c.GrabberID != nil && *c.GrabberID == u.ID
-	target, from := "", ""
-	switch action {
-	case "PICK_UP":
-		if !runner {
-			return Card{}, fault.New("FORBIDDEN", 403)
+	from, target, code := taskModel(c).Fulfill(taskActor(u), action)
+	if code != "" {
+		status := 409
+		if code == "FORBIDDEN" {
+			status = 403
 		}
-		from, target = "ACCEPTED", "PICKED_UP"
-	case "DELIVER":
-		if !runner {
-			return Card{}, fault.New("FORBIDDEN", 403)
-		}
-		from, target = "PICKED_UP", "DELIVERED"
-	case "DISPUTE":
-		if !runner && c.PublisherID != u.ID {
-			return Card{}, fault.New("FORBIDDEN", 403)
-		}
-		target = "DISPUTED"
-		if c.Status != "ACCEPTED" && c.Status != "PICKED_UP" && c.Status != "DELIVERED" && c.Status != target {
-			return Card{}, fault.New("INVALID_STATUS", 409)
-		}
-		from = c.Status
-	case "CANCEL_DRAFT":
-		if c.PublisherID != u.ID {
-			return Card{}, fault.New("FORBIDDEN", 403)
-		}
-		from, target = "DRAFT", "CANCELLED"
+		return Card{}, fault.New(code, status)
 	}
 	if c.Status == target {
 		decorate(&c, u)
@@ -130,6 +111,11 @@ func (g *Grabber) Fulfill(ctx context.Context, u auth.User, id int64, round int,
 // applyCredit is called while the runner's app_user row is locked. Event and
 // score share the business transaction; daily calibration has the same lock.
 func applyCredit(ctx context.Context, tx *sql.Tx, user, id int64, round int, kind string, delta int) error {
+	expected, ok := creditdomain.Delta(kind)
+	if !ok || expected != delta {
+		return fmt.Errorf("invalid credit event rule")
+	}
+
 	r, err := tx.ExecContext(ctx, "INSERT INTO credit_event(user_id,errand_id,round,kind,delta) VALUES (?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id", user, id, round, kind, delta)
 	if err != nil {
 		return err
@@ -138,7 +124,7 @@ func applyCredit(ctx context.Context, tx *sql.Tx, user, id int64, round int, kin
 	if err != nil || n == 0 {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO credit_score(user_id,score,version) VALUES (?,LEAST(100,GREATEST(0,60+?)),1) ON DUPLICATE KEY UPDATE score=LEAST(100,GREATEST(0,score+?)),version=version+1", user, delta, delta)
+	_, err = tx.ExecContext(ctx, "INSERT INTO credit_score(user_id,score,version) VALUES (?,?,1) ON DUPLICATE KEY UPDATE score=LEAST(?,GREATEST(?,score+?)),version=version+1", user, creditdomain.Clamp(creditdomain.Base+delta), creditdomain.Maximum, creditdomain.Minimum, delta)
 	return err
 }
 func (g *Grabber) calibrateUser(ctx context.Context, id int64) error {
