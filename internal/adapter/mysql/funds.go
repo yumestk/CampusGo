@@ -6,13 +6,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
+
 	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/contracts"
 	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 	walletdomain "github.com/yumestk/CampusGo/internal/domain/wallet"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
-	"math"
+
 	"sort"
 
 	"github.com/google/uuid"
@@ -264,7 +264,7 @@ func (f *FundStore) Apply(ctx context.Context, u auth.User, e FundEvent, hash []
 		return r, fault.Dependency(err)
 	}
 	status, escrowTarget := plan.Status, plan.EscrowStatus
-	if _, err = tx.ExecContext(ctx, "UPDATE escrow_order SET status=? WHERE errand_id=?", escrowTarget, e.ErrandID); err != nil {
+	if err = setEscrowStatus(ctx, tx, e.ErrandID, escrowTarget); err != nil {
 		return r, fault.Dependency(err)
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE errand SET status=?,version=version+1,slot_taken=IF(?='CANCELLED',0,slot_taken) WHERE id=?", status, status, e.ErrandID); err != nil {
@@ -296,54 +296,6 @@ func (f *FundStore) Apply(ctx context.Context, u auth.User, e FundEvent, hash []
 	r.State = "COMMITTED"
 	r.Status = status
 	return r, nil
-}
-func (f *FundStore) post(ctx context.Context, tx *sql.Tx, e FundEvent, allocation walletdomain.Allocation) error {
-	type posting struct {
-		id, amount      int64
-		direction, kind string
-		owner           int64
-	}
-	target, kind := e.PublisherID, "REFUND"
-	if fundStatus(e.Kind) == "SETTLED" {
-		target, kind = e.RunnerID, "SETTLE"
-	}
-	var targetID int64
-	if err := tx.QueryRowContext(ctx, "SELECT id FROM wallet_account WHERE owner_id=? AND owner_type='USER'", target).Scan(&targetID); err != nil {
-		return err
-	}
-	legs := []posting{{1, e.Amount, "DEBIT", "ESCROW", -1}, {targetID, allocation.Recipient, "CREDIT", "USER", target}}
-	if allocation.Commission > 0 {
-		legs = append(legs, posting{2, allocation.Commission, "CREDIT", "COMMISSION", -2})
-	}
-	sort.Slice(legs, func(i, j int) bool { return legs[i].id < legs[j].id })
-	for _, leg := range legs {
-		var a lockedAccount
-		if err := tx.QueryRowContext(ctx, "SELECT owner_id,owner_type,available,frozen,version FROM wallet_account WHERE id=? FOR UPDATE", leg.id).Scan(&a.owner, &a.kind, &a.available, &a.frozen, &a.version); err != nil {
-			return err
-		}
-		if a.owner != leg.owner || a.kind != leg.kind || a.version == math.MaxInt64 {
-			return fmt.Errorf("wallet identity/sequence invariant")
-		}
-		after, code := walletdomain.Apply(a.available, a.version, leg.amount, leg.direction == "DEBIT")
-		if code != "" {
-			if code == "BALANCE_LIMIT" {
-				return fault.New(code, 409)
-			}
-			return fmt.Errorf("wallet invariant: %s", code)
-		}
-		if _, err := tx.ExecContext(ctx, "UPDATE wallet_account SET available=?,version=version+1 WHERE id=?", after, leg.id); err != nil {
-			return err
-		}
-		ledgerID, err := f.IDs.Next(ctx)
-		if err != nil {
-			return err
-		}
-		biz := fmt.Sprintf("%s:%d", map[string]string{"SETTLE": "settle", "REFUND": "refund"}[kind], e.ErrandID)
-		if _, err = tx.ExecContext(ctx, "INSERT INTO wallet_ledger(id,biz_no,account_id,user_id,direction,amount,balance_after,account_version,ref_type,ref_id) VALUES(?,?,?,?,?,?,?,?,?,?)", ledgerID, biz, leg.id, target, leg.direction, leg.amount, after, a.version+1, kind, e.ErrandID); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 type FundStore struct {

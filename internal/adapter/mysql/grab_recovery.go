@@ -1,12 +1,13 @@
 package mysql
 
 import (
+	"github.com/yumestk/CampusGo/internal/contracts"
+
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 )
@@ -16,21 +17,6 @@ func enqueueRepair(ctx context.Context, tx *sql.Tx, campus, id int64, event, kin
 	// DEAD remains visible until an operator supplies a reason for replay.
 	_, err := tx.ExecContext(ctx, `INSERT INTO grab_repair_task (campus_id,errand_id,event_key,kind,request_id,next_run_at) VALUES (?,?,?,?,?,TIMESTAMPADD(SECOND,?,CURRENT_TIMESTAMP(3))) ON DUPLICATE KEY UPDATE retry_count=IF(state='DONE',0,retry_count),next_run_at=IF(state='DONE',VALUES(next_run_at),next_run_at),state=IF(state='DONE','PENDING',state)`, campus, id, event, kind, request, delay)
 	return err
-}
-
-type RepairTask struct {
-	ID           int64  `json:"id,string"`
-	CampusID     int64  `json:"campusId,string"`
-	ErrandID     int64  `json:"errandId,string"`
-	EventKey     string `json:"eventKey"`
-	Kind         string `json:"kind"`
-	RequestID    *int64 `json:"requestId,string"`
-	State        string `json:"state"`
-	Attempts     int    `json:"attempts"`
-	ReplayCount  int    `json:"replayCount"`
-	WorkerToken  string `json:"-"`
-	LastError    string `json:"lastError"`
-	ReplayReason string `json:"replayReason"`
 }
 
 const repairColumns = "id,campus_id,errand_id,event_key,kind,request_id,state,retry_count,replay_count,COALESCE(worker_token,''),COALESCE(last_error,''),COALESCE(last_replay_reason,'')"
@@ -104,7 +90,7 @@ func (g *TaskStore) CompleteRepair(ctx context.Context, r RepairTask, cause erro
 	n, err := result.RowsAffected()
 	return n == 1, err
 }
-func (g *TaskStore) repair(ctx context.Context, r RepairTask) error {
+func (g *TaskStore) ApplyRepair(ctx context.Context, r RepairTask) error {
 	switch r.Kind {
 	case "PROJECTION":
 		return g.syncProjection(ctx, r.ErrandID)
@@ -128,45 +114,6 @@ func (g *TaskStore) repair(ctx context.Context, r RepairTask) error {
 	default:
 		return fmt.Errorf("unknown repair kind")
 	}
-}
-func (g *TaskStore) RecoverBatch(ctx context.Context, limit int) error {
-	if limit < 1 || limit > 100 {
-		return fmt.Errorf("recovery limit must be in [1,100]")
-	}
-	rows, err := g.DB.QueryContext(ctx, "SELECT "+grabRequestColumns+" FROM grab_request WHERE state='PROCESSING' AND lease_until<=CURRENT_TIMESTAMP(3) ORDER BY lease_until,id LIMIT ?", limit)
-	if err != nil {
-		return err
-	}
-	expired := []grabRequest{}
-	for rows.Next() {
-		r, e := scanGrab(rows)
-		if e != nil {
-			rows.Close()
-			return e
-		}
-		expired = append(expired, r)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	for _, r := range expired {
-		if _, err = g.finishGrab(ctx, r, "EXPIRED", "REQUEST_EXPIRED"); err != nil {
-			return err
-		}
-	}
-	tasks, err := g.ClaimRepairs(ctx, limit)
-	if err != nil {
-		return err
-	}
-	for _, r := range tasks {
-		cause := g.repair(ctx, r)
-		if _, err = g.CompleteRepair(ctx, r, cause); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // Keyset scan covers Redis eviction, a full Redis restart, and missing repair
@@ -282,30 +229,28 @@ func (g *TaskStore) ReplayRepair(ctx context.Context, id int64, reason string) (
 	n, err := r.RowsAffected()
 	return n == 1, err
 }
-func (g *TaskStore) RunRecovery(ctx context.Context, onError func(error)) {
-	timer := time.NewTicker(time.Second)
-	defer timer.Stop()
-	var cursor int64
-	cycle := 0
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-		}
-		batch, cancel := context.WithTimeout(ctx, 10*time.Second)
-		if err := g.RecoverBatch(batch, 50); err != nil {
-			onError(err)
-		}
-		if cycle%10 == 0 {
-			next, err := g.ReconcileBatch(batch, cursor, 50)
-			if err != nil {
-				onError(err)
-			} else {
-				cursor = next
-			}
-		}
-		cancel()
-		cycle++
+
+type RepairTask = contracts.RepairTask
+
+func (g *TaskStore) ExpiredGrabs(ctx context.Context, limit int) ([]grabRequest, error) {
+	rows, err := g.DB.QueryContext(ctx, "SELECT "+grabRequestColumns+" FROM grab_request WHERE state='PROCESSING' AND lease_until<=CURRENT_TIMESTAMP(3) ORDER BY lease_until,id LIMIT ?", limit)
+	if err != nil {
+		return nil, err
 	}
+	expired := []grabRequest{}
+	for rows.Next() {
+		r, e := scanGrab(rows)
+		if e != nil {
+			rows.Close()
+			return nil, e
+		}
+		expired = append(expired, r)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return expired, nil
 }

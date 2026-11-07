@@ -73,7 +73,11 @@ func run(logger *slog.Logger) error {
 	timeouts := &application.Timeouts{Store: g, Candidates: g}
 	var workers sync.WaitGroup
 	onError := func(err error) { logger.Error("worker operation failed", "cause_type", fmt.Sprintf("%T", err)) }
-	for _, run := range []func(){func() { mq.Run(ctx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), true, onError) }, func() { funds.Run(ctx, onError) }, func() { application.RunEvery(ctx, time.Minute, g.CalibrateDueCredit, onError) }, func() { g.RunRecovery(ctx, onError) }, func() { timeouts.RunTimeoutScan(ctx, onError) }, func() { timeoutmq.Run(ctx, g, timeouts, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), onError, funds) }} {
+	for _, run := range []func(){func() { mq.Run(ctx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), true, onError) }, func() { funds.Run(ctx, onError) }, func() {
+		application.RunEvery(ctx, time.Minute, (&errand.CreditStore{DB: db}).CalibrateDueCredit, onError)
+	}, func() { (&application.Repairs{Store: g}).RunRecovery(ctx, onError) }, func() { timeouts.RunTimeoutScan(ctx, onError) }, func() {
+		timeoutmq.Run(ctx, name, &application.Messages{Store: g}, timeouts, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), onError, funds)
+	}} {
 		workers.Add(1)
 		go func() { defer workers.Done(); run() }()
 	}

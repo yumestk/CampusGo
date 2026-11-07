@@ -9,7 +9,7 @@ import (
 	"strconv"
 )
 
-func registerFulfillment(api *gin.RouterGroup, g *application.Lifecycle, f *application.Funds, credit *errand.TaskStore) {
+func registerFulfillment(api *gin.RouterGroup, g *application.Lifecycle, f *application.Funds, credit *errand.CreditQuery) {
 	api.POST("/errands/:id/actions", func(c *gin.Context) {
 		id, err := positiveID(c.Param("id"))
 		if err != nil {

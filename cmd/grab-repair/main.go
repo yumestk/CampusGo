@@ -1,6 +1,8 @@
 package main
 
 import (
+	"github.com/yumestk/CampusGo/internal/application"
+
 	"context"
 	"encoding/json"
 	"flag"
@@ -33,7 +35,8 @@ func run() error {
 		return err
 	}
 	defer db.Close()
-	g := &errand.TaskStore{DB: db}
+	store := &errand.TaskStore{DB: db}
+	g := &application.Repairs{Store: store}
 	if *replay != 0 {
 		ok, err := g.ReplayRepair(ctx, *replay, *reason)
 		if err != nil {

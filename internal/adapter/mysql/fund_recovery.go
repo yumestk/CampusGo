@@ -1,43 +1,19 @@
 package mysql
 
 import (
-	"bytes"
+	"github.com/yumestk/CampusGo/internal/application"
+
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/yumestk/CampusGo/internal/contracts"
-	"io"
+
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
-
-func decodeFund(body []byte) (FundEvent, error) {
-	var e FundEvent
-	d := json.NewDecoder(bytes.NewReader(body))
-	d.DisallowUnknownFields()
-	if len(body) > 4096 || d.Decode(&e) != nil || d.Decode(new(any)) != io.EOF || !ValidRequestKey(e.RequestID) || e.Amount <= 0 || e.CampusID <= 0 || e.ErrandID <= 0 || e.PublisherID <= 0 || e.Round < 0 || !validFundCommandID(e) {
-		return e, fmt.Errorf("invalid funds event")
-	}
-	return e, nil
-}
-func validFundCommandID(e FundEvent) bool {
-	switch e.Kind {
-	case "CANCEL":
-		return e.ActorID == e.PublisherID && e.Commission == 0
-	case "ARBITRATE_PUBLISHER":
-		return e.ActorID > 0 && e.RunnerID > 0 && e.Commission == 0
-	case "SETTLE":
-		return e.ActorID == e.PublisherID && e.RunnerID > 0 && e.Commission == Commission(e.Amount)
-	case "AUTO_SETTLE":
-		return e.ActorID == -1 && e.RunnerID > 0 && e.Commission == Commission(e.Amount)
-	case "ARBITRATE_RUNNER":
-		return e.ActorID > 0 && e.RunnerID > 0 && e.Commission == Commission(e.Amount)
-	}
-	return false
-}
 
 // Check locks the durable request to distinguish an expired non-execution from
 // an in-flight transaction. A timeout/error/absent fact is UNKNOWN, never rollback.
@@ -55,7 +31,7 @@ func (f *FundStore) Check(ctx context.Context, event FundEvent) (resolution stri
 	if err = tx.QueryRowContext(ctx, "SELECT state,payload FROM fund_request WHERE request_id=? FOR UPDATE", event.RequestID).Scan(&state, &body); err != nil {
 		return "UNKNOWN"
 	}
-	stored, err := decodeFund(body)
+	stored, err := application.DecodeFundEvent(body)
 	if err != nil || stored != event {
 		return "UNKNOWN"
 	}
@@ -102,11 +78,7 @@ func committedPostings(ctx context.Context, tx *sql.Tx, e FundEvent) (bool, erro
 }
 
 // Receipt and recipient notifications commit atomically. Delivery never transfers money.
-func (f *FundStore) Receive(ctx context.Context, body []byte) (string, error) {
-	e, err := decodeFund(body)
-	if err != nil {
-		return "INVALID", nil
-	}
+func (f *FundStore) Receive(ctx context.Context, e FundEvent, notices map[int64]string) (string, error) {
 	tx, err := f.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
@@ -117,7 +89,7 @@ func (f *FundStore) Receive(ctx context.Context, body []byte) (string, error) {
 	if err = tx.QueryRowContext(ctx, "SELECT payload,state FROM fund_request WHERE request_id=? FOR UPDATE", e.RequestID).Scan(&stored, &state); err != nil {
 		return "", err
 	}
-	fact, err := decodeFund(stored)
+	fact, err := application.DecodeFundEvent(stored)
 	if err != nil {
 		return "", err
 	}
@@ -137,7 +109,7 @@ func (f *FundStore) Receive(ctx context.Context, body []byte) (string, error) {
 	if _, err = tx.ExecContext(ctx, "INSERT INTO fund_event_receipt(request_id) VALUES(?) ON DUPLICATE KEY UPDATE request_id=request_id", e.RequestID); err != nil {
 		return "", err
 	}
-	for user, content := range FundNotices(e) {
+	for user, content := range notices {
 		if _, err = tx.ExecContext(ctx, "INSERT INTO notification(msg_key,user_id,errand_id,type,content) VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE id=id", e.RequestID, user, e.ErrandID, e.Kind, content); err != nil {
 			return "", err
 		}
@@ -166,7 +138,7 @@ func (f *FundStore) ClaimRecovery(ctx context.Context) ([]FundRecovery, error) {
 			rows.Close()
 			return nil, err
 		}
-		t.Event, err = decodeFund(body)
+		t.Event, err = application.DecodeFundEvent(body)
 		if err != nil {
 			rows.Close()
 			return nil, err
@@ -233,22 +205,6 @@ func (f *FundStore) Replay(ctx context.Context, key, reason string) (bool, error
 
 // FundNotices describes actual recipient postings, including commission and
 // arbitration outcome; a losing runner must never be told they received money.
-func FundNotices(e FundEvent) map[int64]string {
-	pub := fmt.Sprintf("任务已退款，%d 分已退回你的账户", e.Amount)
-	out := map[int64]string{}
-	if fundStatus(e.Kind) == "SETTLED" {
-		pub = fmt.Sprintf("任务已结算，跑腿实收 %d 分，平台佣金 %d 分", e.Amount-e.Commission, e.Commission)
-		out[e.RunnerID] = fmt.Sprintf("任务已结算，你实收 %d 分，平台佣金 %d 分", e.Amount-e.Commission, e.Commission)
-	}
-	if e.Kind == "ARBITRATE_PUBLISHER" {
-		out[e.RunnerID] = "争议已裁决：款项退回发单人，本次未获得报酬"
-	}
-	if e.Kind == "ARBITRATE_PUBLISHER" || e.Kind == "ARBITRATE_RUNNER" {
-		pub = "争议已裁决：" + pub
-	}
-	out[e.PublisherID] = pub
-	return out
-}
 
 type FundRecovery = contracts.FundRecovery
 
@@ -264,7 +220,7 @@ func (f *FundStore) Expired(ctx context.Context) ([]FundEvent, error) {
 			rows.Close()
 			return nil, err
 		}
-		e, x := decodeFund(body)
+		e, x := application.DecodeFundEvent(body)
 		if x != nil {
 			rows.Close()
 			return nil, x

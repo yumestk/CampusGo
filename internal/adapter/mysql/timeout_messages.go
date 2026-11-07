@@ -82,21 +82,7 @@ func (g *TaskStore) CompleteMessage(ctx context.Context, m TimeoutMessage, cause
 	n, err := result.RowsAffected()
 	return n == 1, err
 }
-func (g *TaskStore) DispatchMessages(ctx context.Context, send func(context.Context, TimeoutMessage) error) error {
-	messages, err := g.ClaimMessages(ctx, 10)
-	if err != nil {
-		return err
-	}
-	for _, m := range messages {
-		sendCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		cause := send(sendCtx, m)
-		cancel()
-		if _, err = g.CompleteMessage(ctx, m, cause); err != nil {
-			return err
-		}
-	}
-	return nil
-}
+
 func (g *TaskStore) DeadMessages(ctx context.Context) ([]TimeoutMessage, error) {
 	rows, err := g.DB.QueryContext(ctx, "SELECT "+messageColumns+" FROM local_message WHERE state='DEAD' ORDER BY id LIMIT 100")
 	if err != nil {

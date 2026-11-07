@@ -1,4 +1,4 @@
-package mysql
+package notification
 
 import (
 	"strings"
@@ -8,11 +8,11 @@ import (
 func TestFundNoticeRecipientsAndPostings(t *testing.T) {
 	for _, kind := range []string{"CANCEL", "SETTLE", "AUTO_SETTLE", "ARBITRATE_RUNNER", "ARBITRATE_PUBLISHER"} {
 		t.Run(kind, func(t *testing.T) {
-			e := FundEvent{Kind: kind, PublisherID: 1001, RunnerID: 2001, Amount: 1001}
-			if fundStatus(kind) == "SETTLED" {
+			e := Settlement{Kind: kind, PublisherID: 1001, RunnerID: 2001, Amount: 1001}
+			if kind == "SETTLE" || kind == "AUTO_SETTLE" || kind == "ARBITRATE_RUNNER" {
 				e.Commission = 50
 			}
-			notices := FundNotices(e)
+			notices := Funds(e)
 			if notices[1001] == "" {
 				t.Fatal("missing publisher")
 			}
@@ -23,7 +23,7 @@ func TestFundNoticeRecipientsAndPostings(t *testing.T) {
 			} else if len(notices) != 2 {
 				t.Fatal("missing runner", notices)
 			}
-			if fundStatus(kind) == "SETTLED" && (!strings.Contains(notices[2001], "951 分") || !strings.Contains(notices[2001], "50 分")) {
+			if (kind == "SETTLE" || kind == "AUTO_SETTLE" || kind == "ARBITRATE_RUNNER") && (!strings.Contains(notices[2001], "951 分") || !strings.Contains(notices[2001], "50 分")) {
 				t.Fatal("net funds mismatch", notices)
 			}
 			if kind == "ARBITRATE_PUBLISHER" && (!strings.Contains(notices[2001], "未获得报酬") || !strings.Contains(notices[1001], "争议已裁决")) {

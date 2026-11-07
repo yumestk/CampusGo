@@ -49,3 +49,27 @@ func (g *TaskStore) Confirm(ctx context.Context, u auth.User, id int64, round in
 func (g *TaskStore) Fulfill(ctx context.Context, u auth.User, id int64, round int, action string) (Card, error) {
 	return (&application.Lifecycle{Store: g}).Fulfill(ctx, u, id, round, action)
 }
+
+func (g *TaskStore) CreditSelf(ctx context.Context, u auth.User) (CreditProfile, error) {
+	return (&CreditQuery{DB: g.DB, Redis: g.Redis, Namespace: g.Namespace}).CreditSelf(ctx, u)
+}
+func (g *TaskStore) CreditRanking(ctx context.Context, u auth.User, campus int64, limit int) ([]CreditRank, error) {
+	return (&CreditQuery{DB: g.DB, Redis: g.Redis, Namespace: g.Namespace}).CreditRanking(ctx, u, campus, limit)
+}
+func (g *TaskStore) calibrateUser(ctx context.Context, id int64) error {
+	return (&CreditStore{DB: g.DB}).calibrateUser(ctx, id)
+}
+func (g *TaskStore) recalibrate(ctx context.Context, id int64, due bool) error {
+	return (&CreditStore{DB: g.DB}).recalibrate(ctx, id, due)
+}
+func (g *TaskStore) CalibrateDueCredit(ctx context.Context) error {
+	return (&CreditStore{DB: g.DB}).CalibrateDueCredit(ctx)
+}
+
+func (g *TaskStore) RecoverBatch(ctx context.Context, limit int) error {
+	return (&application.Repairs{Store: g}).RecoverBatch(ctx, limit)
+}
+func (g *TaskStore) repair(ctx context.Context, r RepairTask) error { return g.ApplyRepair(ctx, r) }
+func (g *TaskStore) DispatchMessages(ctx context.Context, send func(context.Context, TimeoutMessage) error) error {
+	return (&application.Messages{Store: g}).DispatchMessages(ctx, send)
+}

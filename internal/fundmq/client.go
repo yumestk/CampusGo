@@ -11,8 +11,7 @@ import (
 	rmq "github.com/apache/rocketmq-clients/golang/v5"
 	"github.com/apache/rocketmq-clients/golang/v5/credentials"
 	v2 "github.com/apache/rocketmq-clients/golang/v5/protocol/v2"
-	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
-	"github.com/yumestk/CampusGo/internal/application"
+	"github.com/yumestk/CampusGo/internal/contracts"
 )
 
 const Topic = "campusgo-funds"
@@ -24,7 +23,7 @@ type Client struct {
 	Namespace string
 }
 
-func (c *Client) Send(ctx context.Context, e errand.FundEvent) (func(bool) error, error) {
+func (c *Client) Send(ctx context.Context, e contracts.FundEvent) (func(bool) error, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	p := c.producer
@@ -63,7 +62,7 @@ func (c *Client) Send(ctx context.Context, e errand.FundEvent) (func(bool) error
 		return e
 	}, nil
 }
-func (c *Client) Run(ctx context.Context, f *application.Funds, endpoint string, consume bool, onError func(error)) {
+func (c *Client) Run(ctx context.Context, f FundHandler, endpoint string, consume bool, onError func(error)) {
 	for ctx.Err() == nil {
 		if err := c.session(ctx, f, endpoint, consume, onError); err != nil && ctx.Err() == nil {
 			onError(err)
@@ -77,12 +76,12 @@ func (c *Client) Run(ctx context.Context, f *application.Funds, endpoint string,
 		}
 	}
 }
-func (c *Client) session(ctx context.Context, f *application.Funds, endpoint string, consume bool, onError func(error)) error {
+func (c *Client) session(ctx context.Context, f FundHandler, endpoint string, consume bool, onError func(error)) error {
 	p, err := rmq.NewProducer(&rmq.Config{Endpoint: endpoint, Credentials: &credentials.SessionCredentials{}}, rmq.WithTopics(Topic), rmq.WithTransactionChecker(&rmq.TransactionChecker{Check: func(m *rmq.MessageView) rmq.TransactionResolution {
 		if m.GetTag() == nil || *m.GetTag() != c.Namespace {
 			return rmq.UNKNOWN
 		}
-		var e errand.FundEvent
+		var e contracts.FundEvent
 		if json.Unmarshal(m.GetBody(), &e) != nil {
 			return rmq.UNKNOWN
 		}
@@ -120,14 +119,14 @@ func (c *Client) session(ctx context.Context, f *application.Funds, endpoint str
 			return fmt.Errorf("fund producer session requires registration recovery")
 		}
 	}
-	return consumeSession(ctx, f, endpoint, "campusgo-funds-"+c.Namespace, c.Namespace, restart, nil, onError)
+	return consumeSession(ctx, f, f, endpoint, "campusgo-funds-"+c.Namespace, c.Namespace, restart, nil, onError)
 }
 
 // RunPush has no producer and never gates funds.Send availability. A broken
 // realtime subscription must not withdraw the business transaction producer.
-func RunPush(ctx context.Context, f *application.Funds, endpoint, namespace string, push func(context.Context, errand.FundEvent) error, onError func(error)) {
+func RunPush(ctx context.Context, f FundChecker, endpoint, namespace string, push func(context.Context, contracts.FundEvent) error, onError func(error)) {
 	for ctx.Err() == nil {
-		if err := consumeSession(ctx, f, endpoint, "campusgo-funds-push-"+namespace, namespace, nil, push, onError); err != nil && ctx.Err() == nil {
+		if err := consumeSession(ctx, f, nil, endpoint, "campusgo-funds-push-"+namespace, namespace, nil, push, onError); err != nil && ctx.Err() == nil {
 			onError(err)
 		}
 		select {
@@ -137,7 +136,7 @@ func RunPush(ctx context.Context, f *application.Funds, endpoint, namespace stri
 		}
 	}
 }
-func consumeSession(ctx context.Context, f *application.Funds, endpoint, group, namespace string, restart <-chan struct{}, push func(context.Context, errand.FundEvent) error, onError func(error)) error {
+func consumeSession(ctx context.Context, f FundChecker, receiver FundReceiver, endpoint, group, namespace string, restart <-chan struct{}, push func(context.Context, contracts.FundEvent) error, onError func(error)) error {
 	consumer, err := rmq.NewSimpleConsumer(&rmq.Config{Endpoint: endpoint, ConsumerGroup: group, Credentials: &credentials.SessionCredentials{}}, rmq.WithSimpleAwaitDuration(6*time.Second), rmq.WithSimpleSubscriptionExpressions(map[string]*rmq.FilterExpression{Topic: rmq.NewFilterExpression(namespace)}))
 	if err != nil {
 		return err
@@ -165,7 +164,7 @@ func consumeSession(ctx context.Context, f *application.Funds, endpoint, group, 
 		for _, m := range messages {
 			work, cancel := context.WithTimeout(ctx, 5*time.Second)
 			keys := m.GetKeys()
-			var event errand.FundEvent
+			var event contracts.FundEvent
 			if (m.GetTag() == nil || *m.GetTag() != namespace) || json.Unmarshal(m.GetBody(), &event) != nil || len(keys) != 1 || keys[0] != namespace+":"+event.RequestID {
 				e = consumer.Ack(work, m)
 			} else {
@@ -177,7 +176,7 @@ func consumeSession(ctx context.Context, f *application.Funds, endpoint, group, 
 					}
 					e = nil // Realtime never consumes the durable receipt or retries delivery.
 				} else {
-					_, e = f.Receive(work, m.GetBody())
+					_, e = receiver.Receive(work, m.GetBody())
 				}
 				if e == nil {
 					e = consumer.Ack(work, m)
@@ -190,4 +189,15 @@ func consumeSession(ctx context.Context, f *application.Funds, endpoint, group, 
 		}
 	}
 	return ctx.Err()
+}
+
+type FundChecker interface {
+	Check(context.Context, contracts.FundEvent) string
+}
+type FundReceiver interface {
+	Receive(context.Context, []byte) (string, error)
+}
+type FundHandler interface {
+	FundChecker
+	FundReceiver
 }

@@ -28,3 +28,6 @@ func (f *testFunds) execute(ctx context.Context, u auth.User, key string, c Fund
 func (g *TaskStore) ScanAutoSettle(ctx context.Context, f *testFunds) error {
 	return f.ScanAutoSettle(ctx)
 }
+
+func decodeFund(body []byte) (FundEvent, error) { return application.DecodeFundEvent(body) }
+func FundNotices(e FundEvent) map[int64]string  { return application.FundNotices(e) }

@@ -1,6 +1,8 @@
 package application
 
 import (
+	"github.com/yumestk/CampusGo/internal/domain/notification"
+
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -32,7 +34,7 @@ type SettlementStore interface {
 	Result(context.Context, contracts.Actor, string) (FundResult, error)
 	Reject(context.Context, string, string) error
 	Check(context.Context, FundEvent) string
-	Receive(context.Context, []byte) (string, error)
+	Receive(context.Context, FundEvent, map[int64]string) (string, error)
 	Expired(context.Context) ([]FundEvent, error)
 	ClaimRecovery(context.Context) ([]FundRecovery, error)
 	FinishRecovery(context.Context, FundRecovery, error) error
@@ -61,7 +63,11 @@ func (f *Funds) Check(ctx context.Context, e FundEvent) string {
 	return state
 }
 func (f *Funds) Receive(ctx context.Context, body []byte) (string, error) {
-	return f.Store.Receive(ctx, body)
+	e, err := DecodeFundEvent(body)
+	if err != nil {
+		return "INVALID", nil
+	}
+	return f.Store.Receive(ctx, e, FundNotices(e))
 }
 func (f *Funds) Dead(ctx context.Context) ([]FundRecovery, error) { return f.Store.Dead(ctx) }
 func (f *Funds) Replay(ctx context.Context, key, reason string) (bool, error) {
@@ -288,4 +294,8 @@ func planSettlement(e FundEvent) SettlementPlan {
 		p.CreditDelta, _ = creditdomain.Delta(p.CreditKind)
 	}
 	return p
+}
+
+func FundNotices(e FundEvent) map[int64]string {
+	return notification.Funds(notification.Settlement{Kind: e.Kind, PublisherID: e.PublisherID, RunnerID: e.RunnerID, Amount: e.Amount, Commission: e.Commission})
 }

@@ -93,7 +93,7 @@ func run(logger *slog.Logger) error {
 	go func() {
 		defer close(pushDone)
 		fundmq.RunPush(pushCtx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), dbName, func(c context.Context, e errand.FundEvent) error {
-			for user, content := range errand.FundNotices(e) {
+			for user, content := range application.FundNotices(e) {
 				if x := hub.Publish(c, user, notify.Event{Type: "notification.new", Payload: map[string]string{"errandId": strconv.FormatInt(e.ErrandID, 10), "noticeType": e.Kind, "content": content}}); x != nil {
 					return x
 				}
@@ -110,6 +110,6 @@ func run(logger *slog.Logger) error {
 	}()
 	defer func() { stopMQ(); <-mqDone }()
 	httpapi.RegisterRealtime(router, identity, hub)
-	httpapi.RegisterBusiness(router, identity, errand.Query{DB: db, Cache: details}, httpapi.BusinessServices{Publisher: &application.Publisher{Store: &errand.PublishStore{DB: db, IDs: ids}}, Grab: &application.Grab{Store: g, Projection: g, Admission: g}, Lifecycle: &application.Lifecycle{Store: g}, Funds: funds, Credit: g})
+	httpapi.RegisterBusiness(router, identity, errand.Query{DB: db, Cache: details}, httpapi.BusinessServices{Publisher: &application.Publisher{Store: &errand.PublishStore{DB: db, IDs: ids}}, Grab: &application.Grab{Store: g, Projection: g, Admission: g}, Lifecycle: &application.Lifecycle{Store: g}, Funds: funds, Credit: &errand.CreditQuery{DB: g.DB, Redis: g.Redis, Namespace: g.Namespace}})
 	return server.Run(ctx, cfg, router, logger)
 }

@@ -299,5 +299,5 @@ type BusinessServices struct {
 	Grab      *application.Grab
 	Lifecycle *application.Lifecycle
 	Funds     *application.Funds
-	Credit    *errand.TaskStore
+	Credit    *errand.CreditQuery
 }

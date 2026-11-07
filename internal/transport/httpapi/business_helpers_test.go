@@ -13,7 +13,7 @@ func registerTestBusiness(router *gin.Engine, s *auth.Service, q errand.Query, p
 		g := stores[0]
 		services.Grab = &application.Grab{Store: g, Projection: g, Admission: g}
 		services.Lifecycle = &application.Lifecycle{Store: g}
-		services.Credit = g
+		services.Credit = &errand.CreditQuery{DB: g.DB, Redis: g.Redis, Namespace: g.Namespace}
 		services.Funds = &application.Funds{Store: &errand.FundStore{DB: q.DB, IDs: g.IDs}}
 	}
 	RegisterBusiness(router, s, q, services)

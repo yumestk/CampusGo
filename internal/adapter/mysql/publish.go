@@ -170,11 +170,6 @@ func (p *PublishStore) ApplyPublish(ctx context.Context, u auth.User, key string
 	return publishOutcome(r)
 }
 
-type lockedAccount struct {
-	owner, available, frozen, version int64
-	kind                              string
-}
-
 func publishOutcome(r PublishResult) (PublishResult, error) {
 	if r.State == "REJECTED" {
 		return r, fault.New(r.ErrorCode, 409)
@@ -185,35 +180,7 @@ func (p *PublishStore) transfer(ctx context.Context, tx *sql.Tx, u auth.User, c 
 	if _, err := tx.ExecContext(ctx, "INSERT INTO errand (id,campus_id,publisher_id,type,title,reward_amount,slot_total,status) VALUES (?,?,?,?,?,?,1,'DRAFT')", id, u.CampusID, u.ID, c.Type, c.Title, c.RewardCents); err != nil {
 		return err
 	}
-	biz := fmt.Sprintf("escrow:%d", id)
-	for _, leg := range []struct {
-		account, after, version int64
-		direction               string
-	}{{accountID, user.available - c.RewardCents, user.version + 1, "DEBIT"}, {1, escrow.available + c.RewardCents, escrow.version + 1, "CREDIT"}} {
-		result, err := tx.ExecContext(ctx, "UPDATE wallet_account SET available=?,version=? WHERE id=? AND version=?", leg.after, leg.version, leg.account, leg.version-1)
-		if err != nil {
-			return err
-		}
-		n, err := result.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if n != 1 {
-			return fmt.Errorf("locked wallet update lost")
-		}
-		ledgerID, err := p.IDs.Next(ctx)
-		if err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, "INSERT INTO wallet_ledger (id,biz_no,account_id,user_id,direction,amount,balance_after,account_version,ref_type,ref_id) VALUES (?,?,?,?,?,?,?,?,'ESCROW',?)", ledgerID, biz, leg.account, u.ID, leg.direction, c.RewardCents, leg.after, leg.version, id); err != nil {
-			return err
-		}
-	}
-	escrowID, err := p.IDs.Next(ctx)
-	if err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "INSERT INTO escrow_order (id,campus_id,errand_id,publisher_id,amount,status) VALUES (?,?,?,?,?,'HELD')", escrowID, u.CampusID, id, u.ID, c.RewardCents); err != nil {
+	if err := p.postEscrow(ctx, tx, u, c, id, accountID, user, escrow); err != nil {
 		return err
 	}
 	result, err := tx.ExecContext(ctx, "UPDATE errand SET status='PUBLISHED',version=version+1 WHERE id=? AND status='DRAFT' AND version=0", id)

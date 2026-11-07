@@ -1,38 +1,20 @@
 package mysql
 
 import (
+	"github.com/yumestk/CampusGo/internal/contracts"
+
 	"context"
 	"database/sql"
 	"fmt"
 	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
 	"strconv"
-	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 )
 
-type CreditEvent struct {
-	ID          int64     `json:"id,string"`
-	Type        string    `json:"type"`
-	Description string    `json:"description"`
-	Delta       int       `json:"delta"`
-	RefID       int64     `json:"refId,string"`
-	Time        time.Time `json:"time"`
-}
-type CreditProfile struct {
-	Score      int           `json:"score"`
-	Version    int64         `json:"version,string"`
-	WindowDays int           `json:"windowDays"`
-	Events     []CreditEvent `json:"events"`
-}
-type CreditRank struct {
-	UserID int64 `json:"userId,string"`
-	Score  int   `json:"score"`
-}
-
-func (g *TaskStore) CreditSelf(ctx context.Context, u auth.User) (CreditProfile, error) {
+func (g *CreditQuery) CreditSelf(ctx context.Context, u auth.User) (CreditProfile, error) {
 	p := CreditProfile{Score: creditdomain.Base, WindowDays: creditdomain.WindowDays, Events: []CreditEvent{}}
 	tx, err := g.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
@@ -73,7 +55,7 @@ for i=1,#ARGV,2 do redis.call('ZADD',KEYS[1],ARGV[i],ARGV[i+1]) end
 redis.call('EXPIRE',KEYS[1],30)
 return 1`)
 
-func (g *TaskStore) CreditRanking(ctx context.Context, u auth.User, campus int64, limit int) ([]CreditRank, error) {
+func (g *CreditQuery) CreditRanking(ctx context.Context, u auth.User, campus int64, limit int) ([]CreditRank, error) {
 	if campus != u.CampusID {
 		return nil, fault.New("FORBIDDEN", 403)
 	}
@@ -91,7 +73,7 @@ func (g *TaskStore) CreditRanking(ctx context.Context, u auth.User, campus int64
 					out = nil
 					break
 				}
-				out = append(out, CreditRank{id, int(entry.Score)})
+				out = append(out, CreditRank{UserID: id, Score: int(entry.Score)})
 			}
 			if out != nil {
 				return out, nil
@@ -126,3 +108,15 @@ func (g *TaskStore) CreditRanking(ctx context.Context, u auth.User, campus int64
 	}
 	return out, nil
 }
+
+type CreditQuery struct {
+	DB        *sql.DB
+	Redis     *redis.Client
+	Namespace string
+}
+
+type CreditEvent = contracts.CreditEvent
+
+type CreditProfile = contracts.CreditProfile
+
+type CreditRank = contracts.CreditRank
