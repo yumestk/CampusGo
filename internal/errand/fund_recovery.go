@@ -6,9 +6,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/yumestk/CampusGo/internal/contracts"
 	"io"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,10 +42,9 @@ func validFundCommandID(e FundEvent) bool {
 // Check locks the durable request to distinguish an expired non-execution from
 // an in-flight transaction. A timeout/error/absent fact is UNKNOWN, never rollback.
 // Once ABORTED, executeSQL's state fence prevents any delayed executor committing.
-func (f *Funds) Check(ctx context.Context, event FundEvent) (resolution string) {
+func (f *FundStore) Check(ctx context.Context, event FundEvent) (resolution string) {
 	resolution = "UNKNOWN"
-	defer func() { f.record("check", resolution) }()
-	tx, err := f.Grabber.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := f.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return "UNKNOWN"
 	}
@@ -103,12 +102,12 @@ func committedPostings(ctx context.Context, tx *sql.Tx, e FundEvent) (bool, erro
 }
 
 // Receipt and recipient notifications commit atomically. Delivery never transfers money.
-func (f *Funds) Receive(ctx context.Context, body []byte) (string, error) {
+func (f *FundStore) Receive(ctx context.Context, body []byte) (string, error) {
 	e, err := decodeFund(body)
 	if err != nil {
 		return "INVALID", nil
 	}
-	tx, err := f.Grabber.DB.BeginTx(ctx, nil)
+	tx, err := f.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err
 	}
@@ -149,18 +148,8 @@ func (f *Funds) Receive(ctx context.Context, body []byte) (string, error) {
 	return "RECEIVED", tx.Commit()
 }
 
-type FundRecovery struct {
-	Event       FundEvent `json:"event"`
-	Token       string    `json:"-"`
-	Attempts    int       `json:"attempts"`
-	State       string    `json:"state"`
-	ReplayCount int       `json:"replayCount"`
-	Reason      string    `json:"reason"`
-	LastError   string    `json:"lastError"`
-}
-
-func (f *Funds) claimRecovery(ctx context.Context) ([]FundRecovery, error) {
-	tx, err := f.Grabber.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+func (f *FundStore) ClaimRecovery(ctx context.Context) ([]FundRecovery, error) {
+	tx, err := f.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return nil, err
 	}
@@ -208,77 +197,9 @@ func (f *Funds) claimRecovery(ctx context.Context) ([]FundRecovery, error) {
 	}
 	return claimed, nil
 }
-func (f *Funds) Recover(ctx context.Context) error {
-	// Expiry also runs when MQ is down. The request lock prevents a late SQL commit.
-	rows, err := f.Grabber.DB.QueryContext(ctx, "SELECT payload FROM fund_request WHERE state='PREPARED' AND expires_at<=CURRENT_TIMESTAMP(3) ORDER BY expires_at LIMIT 50")
-	if err != nil {
-		return err
-	}
-	events := []FundEvent{}
-	for rows.Next() {
-		var body []byte
-		if err = rows.Scan(&body); err != nil {
-			rows.Close()
-			return err
-		}
-		e, x := decodeFund(body)
-		if x != nil {
-			rows.Close()
-			return x
-		}
-		events = append(events, e)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	for _, e := range events {
-		c, cancel := context.WithTimeout(ctx, time.Second)
-		f.Check(c, e)
-		cancel()
-	}
-	if f.Send == nil {
-		return nil
-	}
-	tasks, err := f.claimRecovery(ctx)
-	if err != nil {
-		return err
-	}
-	for _, t := range tasks {
-		c, cancel := context.WithTimeout(ctx, 2*time.Second)
-		var resolve func(bool) error
-		var e error
-		if f.Check(c, t.Event) != "COMMIT" {
-			e = fmt.Errorf("funds facts unavailable or inconsistent")
-		} else {
-			resolve, e = f.Send(c, t.Event)
-		}
-		if e == nil {
-			e = resolve(true)
-		}
-		cancel()
-		// Confirmation only proves send/commit, not consumption. Republish the same
-		// event after a bounded wait until a receipt exists, with a finite retry budget.
-		_, err = f.Grabber.DB.ExecContext(ctx, `UPDATE fund_request SET recovery_state=IF(recovery_attempts>=10,'DEAD','PENDING'),next_recovery_at=TIMESTAMPADD(SECOND,LEAST(POW(2,recovery_attempts)*60,3600),CURRENT_TIMESTAMP(3)),recovery_token=NULL,recovery_until=NULL,last_recovery_error=? WHERE request_id=? AND recovery_state='RUNNING' AND recovery_token=? AND recovery_until>CURRENT_TIMESTAMP(3)`, func() string {
-			if e != nil {
-				return "RECOVERY_UNCONFIRMED"
-			}
-			return "AWAITING_RECEIPT"
-		}(), t.Event.RequestID, t.Token)
-		if err != nil {
-			return err
-		}
-		if e != nil {
-			f.record("recovery", "ERROR")
-		} else {
-			f.record("recovery", "SENT")
-		}
-	}
-	return nil
-}
-func (f *Funds) Dead(ctx context.Context) ([]FundRecovery, error) {
-	rows, err := f.Grabber.DB.QueryContext(ctx, "SELECT payload,recovery_attempts,recovery_state,replay_count,COALESCE(replay_reason,''),last_recovery_error FROM fund_request WHERE recovery_state='DEAD' ORDER BY request_id LIMIT 100")
+
+func (f *FundStore) Dead(ctx context.Context) ([]FundRecovery, error) {
+	rows, err := f.DB.QueryContext(ctx, "SELECT payload,recovery_attempts,recovery_state,replay_count,COALESCE(replay_reason,''),last_recovery_error FROM fund_request WHERE recovery_state='DEAD' ORDER BY request_id LIMIT 100")
 	if err != nil {
 		return nil, err
 	}
@@ -297,32 +218,17 @@ func (f *Funds) Dead(ctx context.Context) ([]FundRecovery, error) {
 	}
 	return out, rows.Err()
 }
-func (f *Funds) Replay(ctx context.Context, key, reason string) (bool, error) {
+func (f *FundStore) Replay(ctx context.Context, key, reason string) (bool, error) {
 	reason = strings.TrimSpace(reason)
 	if !ValidRequestKey(key) || len(reason) == 0 || len(reason) > 200 || strings.ContainsAny(reason, "\r\n") {
 		return false, fmt.Errorf("valid request UUID and 1-200 byte single-line reason required")
 	}
-	r, err := f.Grabber.DB.ExecContext(ctx, "UPDATE fund_request SET recovery_state='PENDING',recovery_attempts=0,replay_count=replay_count+1,replay_reason=?,next_recovery_at=CURRENT_TIMESTAMP(3),recovery_token=NULL,recovery_until=NULL WHERE request_id=? AND state='COMMITTED' AND recovery_state='DEAD'", reason, key)
+	r, err := f.DB.ExecContext(ctx, "UPDATE fund_request SET recovery_state='PENDING',recovery_attempts=0,replay_count=replay_count+1,replay_reason=?,next_recovery_at=CURRENT_TIMESTAMP(3),recovery_token=NULL,recovery_until=NULL WHERE request_id=? AND state='COMMITTED' AND recovery_state='DEAD'", reason, key)
 	if err != nil {
 		return false, err
 	}
 	n, err := r.RowsAffected()
 	return n == 1, err
-}
-func (f *Funds) Run(ctx context.Context, onError func(error)) {
-	var wg sync.WaitGroup
-	for _, job := range []struct {
-		interval time.Duration
-		fn       func(context.Context) error
-	}{
-		{time.Second, f.Recover},
-		{time.Second, func(c context.Context) error { return f.Grabber.ScanAutoSettle(c, f) }},
-		{time.Minute, f.Grabber.CalibrateDueCredit},
-	} {
-		wg.Add(1)
-		go func() { defer wg.Done(); runEvery(ctx, job.interval, job.fn, onError) }()
-	}
-	wg.Wait()
 }
 
 // FundNotices describes actual recipient postings, including commission and
@@ -342,4 +248,74 @@ func FundNotices(e FundEvent) map[int64]string {
 	}
 	out[e.PublisherID] = pub
 	return out
+}
+
+type FundRecovery = contracts.FundRecovery
+
+func (f *FundStore) Expired(ctx context.Context) ([]FundEvent, error) {
+	rows, err := f.DB.QueryContext(ctx, "SELECT payload FROM fund_request WHERE state='PREPARED' AND expires_at<=CURRENT_TIMESTAMP(3) ORDER BY expires_at LIMIT 50")
+	if err != nil {
+		return nil, err
+	}
+	events := []FundEvent{}
+	for rows.Next() {
+		var body []byte
+		if err = rows.Scan(&body); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		e, x := decodeFund(body)
+		if x != nil {
+			rows.Close()
+			return nil, x
+		}
+		events = append(events, e)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return events, nil
+}
+
+func (f *FundStore) FinishRecovery(ctx context.Context, t FundRecovery, e error) error {
+	_, err := f.DB.ExecContext(ctx, `UPDATE fund_request SET recovery_state=IF(recovery_attempts>=10,'DEAD','PENDING'),next_recovery_at=TIMESTAMPADD(SECOND,LEAST(POW(2,recovery_attempts)*60,3600),CURRENT_TIMESTAMP(3)),recovery_token=NULL,recovery_until=NULL,last_recovery_error=? WHERE request_id=? AND recovery_state='RUNNING' AND recovery_token=? AND recovery_until>CURRENT_TIMESTAMP(3)`, func() string {
+		if e != nil {
+			return "RECOVERY_UNCONFIRMED"
+		}
+		return "AWAITING_RECEIPT"
+	}(), t.Event.RequestID, t.Token)
+	return err
+}
+
+func (f *FundStore) DueSettlements(ctx context.Context) ([]contracts.DueSettlement, error) {
+	rows, err := f.DB.QueryContext(ctx, "SELECT id,campus_id,round FROM errand WHERE status='DELIVERED' AND delivered_at<=TIMESTAMPADD(SECOND,-86400,CURRENT_TIMESTAMP(3)) ORDER BY delivered_at,id LIMIT 50")
+	if err != nil {
+		return nil, err
+	}
+
+	tasks := []contracts.DueSettlement{}
+	for rows.Next() {
+		var t contracts.DueSettlement
+		if err = rows.Scan(&t.ID, &t.CampusID, &t.Round); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		tasks = append(tasks, t)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
+}
+
+func (f *FundStore) ValidAutoSettle(ctx context.Context, id, campus int64, round int, version int64, deadline time.Time) (bool, error) {
+	var valid bool
+	err := f.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM errand WHERE id=? AND campus_id=? AND round=? AND version=? AND status='DELIVERED' AND TIMESTAMPADD(SECOND,86400,delivered_at)=? AND delivered_at<=TIMESTAMPADD(SECOND,-86400,CURRENT_TIMESTAMP(3)))", id, campus, round, version, deadline.UTC()).Scan(&valid)
+	return valid, err
 }

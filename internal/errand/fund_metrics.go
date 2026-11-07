@@ -7,8 +7,7 @@ func NewFundMetrics(registry *prometheus.Registry) *prometheus.CounterVec {
 	registry.MustRegister(events)
 	return events
 }
-func (f *Funds) record(operation, outcome string) {
-	if f.Events != nil {
-		f.Events.WithLabelValues(operation, outcome).Inc()
-	}
+func NewFundRecorder(registry *prometheus.Registry) func(string, string) {
+	events := NewFundMetrics(registry)
+	return func(op, outcome string) { events.WithLabelValues(op, outcome).Inc() }
 }

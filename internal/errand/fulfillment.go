@@ -1,15 +1,11 @@
 package errand
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
-	"io"
-	"strconv"
 	"time"
 
 	"github.com/yumestk/CampusGo/internal/auth"
@@ -155,38 +151,7 @@ func (g *Grabber) recalibrate(ctx context.Context, id int64, dueOnly bool) error
 	}
 	return tx.Commit()
 }
-func (g *Grabber) ScanAutoSettle(ctx context.Context, f *Funds) error {
-	rows, err := g.DB.QueryContext(ctx, "SELECT id,campus_id,round FROM errand WHERE status='DELIVERED' AND delivered_at<=TIMESTAMPADD(SECOND,-86400,CURRENT_TIMESTAMP(3)) ORDER BY delivered_at,id LIMIT 50")
-	if err != nil {
-		return err
-	}
-	type due struct {
-		id, campus int64
-		round      int
-	}
-	tasks := []due{}
-	for rows.Next() {
-		var t due
-		if err = rows.Scan(&t.id, &t.campus, &t.round); err != nil {
-			rows.Close()
-			return err
-		}
-		tasks = append(tasks, t)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	for _, t := range tasks {
-		key := autoUUID(fmt.Sprintf("auto-settle:%d:%d:%d", t.id, t.round, time.Now().Unix()/60))
-		_, e := f.Execute(ctx, auth.User{ID: -1, CampusID: t.campus}, key, FundCommand{ErrandID: t.id, Round: t.round, Action: "AUTO_SETTLE"})
-		if e != nil {
-			return e
-		}
-	}
-	return nil
-}
+
 func runEvery(ctx context.Context, d time.Duration, fn func(context.Context) error, onError func(error)) {
 	tick := time.NewTicker(d)
 	defer tick.Stop()
@@ -202,37 +167,6 @@ func runEvery(ctx context.Context, d time.Duration, fn func(context.Context) err
 			cancel()
 		}
 	}
-}
-
-func (f *Funds) ConsumeAutoSettle(ctx context.Context, body []byte) (string, error) {
-	var p struct {
-		ErrandID string `json:"errandId"`
-		CampusID string `json:"campusId"`
-		Round    int    `json:"round"`
-		Version  string `json:"version"`
-		Deadline string `json:"deadline"`
-	}
-	d := json.NewDecoder(bytes.NewReader(body))
-	d.DisallowUnknownFields()
-	if len(body) > 4096 || d.Decode(&p) != nil || d.Decode(new(any)) != io.EOF {
-		return "INVALID", nil
-	}
-	id, e1 := strconv.ParseInt(p.ErrandID, 10, 64)
-	campus, e2 := strconv.ParseInt(p.CampusID, 10, 64)
-	version, e3 := strconv.ParseInt(p.Version, 10, 64)
-	deadline, e4 := time.Parse(time.RFC3339Nano, p.Deadline)
-	if e1 != nil || e2 != nil || e3 != nil || e4 != nil || id <= 0 || campus <= 0 || version < 0 || p.Round < 0 {
-		return "INVALID", nil
-	}
-	var valid bool
-	if err := f.Grabber.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM errand WHERE id=? AND campus_id=? AND round=? AND version=? AND status='DELIVERED' AND TIMESTAMPADD(SECOND,86400,delivered_at)=? AND delivered_at<=TIMESTAMPADD(SECOND,-86400,CURRENT_TIMESTAMP(3)))", id, campus, p.Round, version, deadline.UTC()).Scan(&valid); err != nil {
-		return "", err
-	}
-	if !valid {
-		return "SKIPPED", nil
-	}
-	_, err := f.Execute(ctx, auth.User{ID: -1, CampusID: campus}, autoUUID(fmt.Sprintf("auto-settle:%d:%d:%d", id, p.Round, time.Now().Unix()/60)), FundCommand{ErrandID: id, Round: p.Round, Action: "AUTO_SETTLE"})
-	return "TRIGGERED", err
 }
 
 // Persisted oldest-first scheduling prevents a large calibration set from

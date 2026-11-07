@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/yumestk/CampusGo/internal/contracts"
 	"regexp"
 	"strconv"
 	"time"
@@ -17,12 +18,8 @@ import (
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 )
 
-type User struct {
-	ID       int64  `json:"id,string"`
-	CampusID int64  `json:"campusId,string"`
-	Name     string `json:"name"`
-	Role     string `json:"role"`
-}
+type User = contracts.Actor
+
 type Session struct {
 	Token        string `json:"token"`
 	UserID       int64  `json:"userId,string"`

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/yumestk/CampusGo/internal/application"
 	"io"
 	"log/slog"
 	"net/http"
@@ -194,7 +195,7 @@ func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, p *er
 		registerGrab(protected, grabbers[0])
 		f := p.Funds
 		if f == nil {
-			f = &errand.Funds{Grabber: grabbers[0]}
+			f = &application.Funds{Store: &errand.FundStore{DB: q.DB, IDs: grabbers[0].IDs}}
 		}
 		registerFulfillment(protected, grabbers[0], f)
 	}

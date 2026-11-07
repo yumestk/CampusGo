@@ -2,13 +2,14 @@ package httpapi
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"strconv"
 )
 
-func registerFulfillment(api *gin.RouterGroup, g *errand.Grabber, f *errand.Funds) {
+func registerFulfillment(api *gin.RouterGroup, g *errand.Grabber, f *application.Funds) {
 	api.POST("/errands/:id/actions", func(c *gin.Context) {
 		id, err := positiveID(c.Param("id"))
 		if err != nil {

@@ -1,0 +1,35 @@
+{
+  "cases": [
+    {
+      "commandJSON": "{\"errandId\":\"9007199254741001\",\"round\":0,\"action\":\"SETTLE\"}",
+      "eventJSON": "{\"requestId\":\"9b61a2ed-d35e-43ef-aac8-a6d99f83dff3\",\"campusId\":\"1\",\"errandId\":\"9007199254741001\",\"actorId\":\"9007199254741003\",\"publisherId\":\"9007199254741003\",\"runnerId\":\"9007199254741007\",\"round\":0,\"kind\":\"SETTLE\",\"amountCents\":\"1001\",\"commissionCents\":\"50\"}",
+      "fingerprint": "c9ce6ce2683e462b062dad45a7820be2f23d2d5a365aa37b91d5901dbd7edb42",
+      "kind": "SETTLE"
+    },
+    {
+      "commandJSON": "{\"errandId\":\"9007199254741001\",\"round\":0,\"action\":\"AUTO_SETTLE\"}",
+      "eventJSON": "{\"requestId\":\"9b61a2ed-d35e-43ef-aac8-a6d99f83dff3\",\"campusId\":\"1\",\"errandId\":\"9007199254741001\",\"actorId\":\"-1\",\"publisherId\":\"9007199254741003\",\"runnerId\":\"9007199254741007\",\"round\":0,\"kind\":\"AUTO_SETTLE\",\"amountCents\":\"1001\",\"commissionCents\":\"50\"}",
+      "fingerprint": "6fd3a46aad4774e786d60c88a97160816a04f536d94599cf43b6e31e8bc7a774",
+      "kind": "AUTO_SETTLE"
+    },
+    {
+      "commandJSON": "{\"errandId\":\"9007199254741001\",\"round\":0,\"action\":\"CANCEL\"}",
+      "eventJSON": "{\"requestId\":\"9b61a2ed-d35e-43ef-aac8-a6d99f83dff3\",\"campusId\":\"1\",\"errandId\":\"9007199254741001\",\"actorId\":\"9007199254741003\",\"publisherId\":\"9007199254741003\",\"runnerId\":\"0\",\"round\":0,\"kind\":\"CANCEL\",\"amountCents\":\"1001\",\"commissionCents\":\"0\"}",
+      "fingerprint": "257b2ece4548bff234c7f164411486390283dafd22114dc5783e1ccbfc4d02ac",
+      "kind": "CANCEL"
+    },
+    {
+      "commandJSON": "{\"errandId\":\"9007199254741001\",\"round\":0,\"action\":\"ARBITRATE_RUNNER\"}",
+      "eventJSON": "{\"requestId\":\"9b61a2ed-d35e-43ef-aac8-a6d99f83dff3\",\"campusId\":\"1\",\"errandId\":\"9007199254741001\",\"actorId\":\"9007199254741005\",\"publisherId\":\"9007199254741003\",\"runnerId\":\"9007199254741007\",\"round\":0,\"kind\":\"ARBITRATE_RUNNER\",\"amountCents\":\"1001\",\"commissionCents\":\"50\"}",
+      "fingerprint": "cb0ee0db287fd4ccbf5880790760c9789a1770f4e8e9f3622d70e5d728f57a47",
+      "kind": "ARBITRATE_RUNNER"
+    },
+    {
+      "commandJSON": "{\"errandId\":\"9007199254741001\",\"round\":0,\"action\":\"ARBITRATE_PUBLISHER\"}",
+      "eventJSON": "{\"requestId\":\"9b61a2ed-d35e-43ef-aac8-a6d99f83dff3\",\"campusId\":\"1\",\"errandId\":\"9007199254741001\",\"actorId\":\"9007199254741005\",\"publisherId\":\"9007199254741003\",\"runnerId\":\"9007199254741007\",\"round\":0,\"kind\":\"ARBITRATE_PUBLISHER\",\"amountCents\":\"1001\",\"commissionCents\":\"0\"}",
+      "fingerprint": "9c173ffa1555c8e9d34037d16fcb2f359bcad7565069ad6f97fce46d66df230f",
+      "kind": "ARBITRATE_PUBLISHER"
+    }
+  ],
+  "sourceCommit": "3dfaab25f4294ace69c3e130e53221a82600c4f9"
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/yumestk/CampusGo/internal/application"
 	"os"
 	"time"
 
@@ -33,8 +34,8 @@ func run() error {
 		return err
 	}
 	defer db.Close()
-	g := &errand.Grabber{DB: db}
-	f := &errand.Funds{Grabber: g}
+
+	f := &application.Funds{Store: &errand.FundStore{DB: db}}
 	if *replay != "" {
 		ok, err := f.Replay(ctx, *replay, *reason)
 		if err != nil {

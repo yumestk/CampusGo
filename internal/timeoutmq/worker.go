@@ -8,6 +8,7 @@ import (
 	rmq "github.com/apache/rocketmq-clients/golang/v5"
 	"github.com/apache/rocketmq-clients/golang/v5/credentials"
 	v2 "github.com/apache/rocketmq-clients/golang/v5/protocol/v2"
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/errand"
 )
 
@@ -16,7 +17,7 @@ const AutoTopic = "campusgo-auto-settle"
 
 // SQL scans run independently in the worker. Failure to connect or publish never
 // disables that recovery path. Group and tag isolate live and verification data.
-func Run(ctx context.Context, g *errand.Grabber, endpoint string, onError func(error), funds ...*errand.Funds) {
+func Run(ctx context.Context, g *errand.Grabber, endpoint string, onError func(error), funds ...*application.Funds) {
 	for ctx.Err() == nil {
 		if err := session(ctx, g, endpoint, onError, funds...); err != nil && ctx.Err() == nil {
 			onError(err)
@@ -30,7 +31,7 @@ func Run(ctx context.Context, g *errand.Grabber, endpoint string, onError func(e
 		}
 	}
 }
-func session(ctx context.Context, g *errand.Grabber, endpoint string, onError func(error), funds ...*errand.Funds) error {
+func session(ctx context.Context, g *errand.Grabber, endpoint string, onError func(error), funds ...*application.Funds) error {
 	producer, err := rmq.NewProducer(&rmq.Config{Endpoint: endpoint, Credentials: &credentials.SessionCredentials{}}, rmq.WithTopics(Topic, AutoTopic))
 	if err != nil {
 		return err

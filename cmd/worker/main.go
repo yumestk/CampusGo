@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/yumestk/CampusGo/internal/application"
 	"log/slog"
 	"net/http"
 	"os"
@@ -68,10 +69,10 @@ func run(logger *slog.Logger) error {
 	g := &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: name}
 	registry := telemetry.NewRegistry("worker")
 	mq := &fundmq.Client{Namespace: name}
-	funds := &errand.Funds{Grabber: g, Send: mq.Send, Events: errand.NewFundMetrics(registry)}
+	funds := &application.Funds{Store: &errand.FundStore{DB: db, IDs: ids}, Send: mq.Send, Record: errand.NewFundRecorder(registry)}
 	var workers sync.WaitGroup
 	onError := func(err error) { logger.Error("worker operation failed", "cause_type", fmt.Sprintf("%T", err)) }
-	for _, run := range []func(){func() { mq.Run(ctx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), true, onError) }, func() { funds.Run(ctx, onError) }, func() { g.RunRecovery(ctx, onError) }, func() { g.RunTimeoutScan(ctx, onError) }, func() { timeoutmq.Run(ctx, g, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), onError, funds) }} {
+	for _, run := range []func(){func() { mq.Run(ctx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), true, onError) }, func() { funds.Run(ctx, onError) }, func() { application.RunEvery(ctx, time.Minute, g.CalibrateDueCredit, onError) }, func() { g.RunRecovery(ctx, onError) }, func() { g.RunTimeoutScan(ctx, onError) }, func() { timeoutmq.Run(ctx, g, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), onError, funds) }} {
 		workers.Add(1)
 		go func() { defer workers.Done(); run() }()
 	}

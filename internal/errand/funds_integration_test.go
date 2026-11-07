@@ -3,6 +3,7 @@ package errand
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -110,7 +111,7 @@ func TestIntegrationD5(t *testing.T) {
 	sender := func(context.Context, FundEvent) (func(bool) error, error) {
 		return func(bool) error { return nil }, nil
 	}
-	f := &Funds{Grabber: g, Send: sender}
+	f := newTestFunds(g, sender)
 	newTask := func(amount int64) int64 {
 		t.Helper()
 		r, e := p.Publish(ctx, publisher, uuid.NewString(), PublishCommand{CampusID: 1, Type: "DELIVERY", Title: "D5验证任务", RewardCents: amount, SlotTotal: 1})
@@ -174,6 +175,76 @@ func TestIntegrationD5(t *testing.T) {
 		}
 		return s
 	}
+
+	t.Run("pre_refactor_persisted_requests_messages_replay_and_check", func(t *testing.T) {
+		body, e := os.ReadFile(filepath.Join("..", "contracts", "testdata", "pre-refactor-funds.json"))
+		if e != nil {
+			t.Fatal(e)
+		}
+		var fixture struct {
+			Cases []struct{ Kind, CommandJSON, EventJSON string }
+		}
+		if e = json.Unmarshal(body, &fixture); e != nil || len(fixture.Cases) != 5 {
+			t.Fatal("legacy fixtures", e)
+		}
+		for _, old := range fixture.Cases {
+			t.Run(old.Kind, func(t *testing.T) {
+				var id int64
+				actor := publisher
+				switch old.Kind {
+				case "CANCEL":
+					id = newTask(1001)
+				case "ARBITRATE_RUNNER", "ARBITRATE_PUBLISHER":
+					id = accepted(1001)
+					actor = arb
+					if _, e := g.Fulfill(ctx, publisher, id, 0, "DISPUTE"); e != nil {
+						t.Fatal(e)
+					}
+				default:
+					id = delivered(1001)
+				}
+				if old.Kind == "AUTO_SETTLE" {
+					actor = auth.User{ID: -1, CampusID: 1}
+					exec("UPDATE errand SET delivered_at=TIMESTAMPADD(SECOND,-86401,CURRENT_TIMESTAMP(3)) WHERE id=?", id)
+				}
+				key := uuid.NewString()
+				replace := strings.NewReplacer("9007199254741001", fmt.Sprint(id), "9007199254741003", fmt.Sprint(publisher.ID), "9007199254741005", fmt.Sprint(arb.ID), "9007199254741007", fmt.Sprint(runner.ID), "9b61a2ed-d35e-43ef-aac8-a6d99f83dff3", key)
+				legacyCommand, legacyEvent := replace.Replace(old.CommandJSON), replace.Replace(old.EventJSON)
+				hash := sha256.Sum256([]byte(legacyCommand))
+				exec("INSERT INTO fund_request(request_id,actor_id,campus_id,errand_id,fingerprint,payload,expires_at,next_recovery_at) VALUES(?,?,1,?,?,?,TIMESTAMPADD(SECOND,60,CURRENT_TIMESTAMP(3)),TIMESTAMPADD(SECOND,120,CURRENT_TIMESTAMP(3)))", key, actor.ID, id, hash[:], legacyEvent)
+				var cmd FundCommand
+				var ev FundEvent
+				if e := json.Unmarshal([]byte(legacyCommand), &cmd); e != nil {
+					t.Fatal(e)
+				}
+				if e := json.Unmarshal([]byte(legacyEvent), &ev); e != nil {
+					t.Fatal(e)
+				}
+				if result, e := f.Execute(ctx, actor, key, cmd); e != nil || result.State != "COMMITTED" {
+					t.Fatal("old prepared request not executable", result, e)
+				}
+				if got := f.Check(ctx, ev); got != "COMMIT" {
+					t.Fatal("old message not checkable", got)
+				}
+				legs := count("SELECT COUNT(*) FROM wallet_ledger WHERE ref_id=?", id)
+				for range 2 {
+					if result, e := f.Execute(ctx, actor, key, cmd); e != nil || result.State != "COMMITTED" {
+						t.Fatal("old request replay", result, e)
+					}
+					if got, e := f.Receive(ctx, []byte(legacyEvent)); e != nil || got != "RECEIVED" {
+						t.Fatal("old message receipt", got, e)
+					}
+				}
+				if count("SELECT COUNT(*) FROM wallet_ledger WHERE ref_id=?", id) != legs || count("SELECT COUNT(*) FROM fund_event_receipt WHERE request_id=?", key) != 1 {
+					t.Fatal("legacy replay duplicated effects")
+				}
+				if count("SELECT COUNT(*) FROM fund_request WHERE request_id=? AND recovery_state='DONE'", key) != 1 {
+					t.Fatal("legacy receipt did not finish recovery")
+				}
+				reconcile()
+			})
+		}
+	})
 	t.Run("fulfillment_permissions_idempotency_and_delivery_time", func(t *testing.T) {
 		id := accepted(1001)
 		_, e := g.Fulfill(ctx, other, id, 0, "PICK_UP")
@@ -347,7 +418,7 @@ func TestIntegrationD5(t *testing.T) {
 	t.Run("no_half_ack_no_SQL_and_retry_same_key", func(t *testing.T) {
 		id := delivered(1001)
 		key := uuid.NewString()
-		broken := &Funds{Grabber: g, Send: func(context.Context, FundEvent) (func(bool) error, error) { return nil, io.EOF }}
+		broken := newTestFunds(g, func(context.Context, FundEvent) (func(bool) error, error) { return nil, io.EOF })
 		_, e := broken.Execute(ctx, publisher, key, command(id, "SETTLE"))
 		requireCode(t, e, "FUND_RESULT_UNKNOWN")
 		if state(id) != "DELIVERED" || count("SELECT COUNT(*) FROM wallet_ledger WHERE ref_id=? AND ref_type='SETTLE'", id) != 0 {
@@ -364,7 +435,7 @@ func TestIntegrationD5(t *testing.T) {
 	t.Run("expiry_fences_late_executor", func(t *testing.T) {
 		id := delivered(1001)
 		key := uuid.NewString()
-		broken := &Funds{Grabber: g, Send: func(context.Context, FundEvent) (func(bool) error, error) { return nil, io.EOF }}
+		broken := newTestFunds(g, func(context.Context, FundEvent) (func(bool) error, error) { return nil, io.EOF })
 		broken.Execute(ctx, publisher, key, command(id, "SETTLE"))
 		exec("UPDATE fund_request SET expires_at=TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(3)) WHERE request_id=?", key)
 		if f.Check(ctx, event(key)) != "ROLLBACK" {
@@ -449,7 +520,7 @@ func TestIntegrationD5(t *testing.T) {
 			t.Fatal(x)
 		}
 		closed.Close()
-		unavailable := &Funds{Grabber: &Grabber{DB: closed}}
+		unavailable := newTestFunds(&Grabber{DB: closed}, nil)
 		if unavailable.Check(ctx, e) != "UNKNOWN" {
 			t.Fatal("DB failure rolled back")
 		}
@@ -467,13 +538,13 @@ func TestIntegrationD5(t *testing.T) {
 			t.Fatal(result, e)
 		}
 		exec("UPDATE errand SET delivered_at=TIMESTAMPADD(SECOND,-86401,CURRENT_TIMESTAMP(3)) WHERE id=?", id)
-		if e = g.ScanAutoSettle(ctx, f); e != nil {
+		if e = f.ScanAutoSettle(ctx); e != nil {
 			t.Fatal(e)
 		}
 		if state(id) != "SETTLED" {
 			t.Fatal("scan didn't settle")
 		}
-		if e = g.ScanAutoSettle(ctx, f); e != nil {
+		if e = f.ScanAutoSettle(ctx); e != nil {
 			t.Fatal(e)
 		}
 		reconcile()
@@ -485,12 +556,12 @@ func TestIntegrationD5(t *testing.T) {
 			t.Fatal(e)
 		}
 		exec("UPDATE fund_request SET next_recovery_at=CURRENT_TIMESTAMP(3) WHERE request_id=?", key)
-		tasks, e := f.claimRecovery(ctx)
+		tasks, e := f.store.ClaimRecovery(ctx)
 		if e != nil || len(tasks) != 1 {
 			t.Fatal(len(tasks), e)
 		}
 		exec("UPDATE fund_request SET recovery_attempts=10,recovery_until=TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(3)) WHERE request_id=?", key)
-		if _, e = f.claimRecovery(ctx); e != nil {
+		if _, e = f.store.ClaimRecovery(ctx); e != nil {
 			t.Fatal(e)
 		}
 		if _, e = f.Replay(ctx, key, ""); e == nil {
@@ -629,7 +700,7 @@ func TestIntegrationD5(t *testing.T) {
 		id := delivered(1001)
 		key := uuid.NewString()
 		addr, dropped := commitAckProxyAt(t, 2)
-		proxied := &Funds{Grabber: &Grabber{DB: databaseViaProxy(t, addr), IDs: ids}, Send: sender}
+		proxied := newTestFunds(&Grabber{DB: databaseViaProxy(t, addr), IDs: ids}, sender)
 		_, e := proxied.Execute(ctx, publisher, key, command(id, "SETTLE"))
 		requireCode(t, e, "FUND_RESULT_UNKNOWN")
 		select {
@@ -669,7 +740,7 @@ func TestIntegrationD5(t *testing.T) {
 			}
 			if stage == "recovery_claimed" {
 				exec("UPDATE fund_request SET recovery_until=TIMESTAMPADD(SECOND,-1,CURRENT_TIMESTAMP(3)) WHERE request_id=?", key)
-				tasks, e := f.claimRecovery(ctx)
+				tasks, e := f.store.ClaimRecovery(ctx)
 				if e != nil || len(tasks) != 1 || tasks[0].Attempts != 2 {
 					t.Fatal(tasks, e)
 				}
@@ -683,7 +754,7 @@ func TestIntegrationD5(t *testing.T) {
 	}
 	reconcile()
 }
-func testD5MQ(t *testing.T, ctx context.Context, db *sql.DB, f *Funds, publisher auth.User, delivered func(int64) int64, event func(string) FundEvent, reconcile func()) {
+func testD5MQ(t *testing.T, ctx context.Context, db *sql.DB, f *testFunds, publisher auth.User, delivered func(int64) int64, event func(string) FundEvent, reconcile func()) {
 	// Real native transaction protocol. First omit EndTransaction deliberately;
 	// the broker must ask the durable SQL checker and expose the committed event.
 	var checks atomic.Int64
@@ -899,9 +970,9 @@ func TestD5CrashHelper(t *testing.T) {
 	ids, _ := idgen.New(1014)
 	id, _ := strconv.ParseInt(os.Getenv("CAMPUSGO_D5_TASK"), 10, 64)
 	actor, _ := strconv.ParseInt(os.Getenv("CAMPUSGO_D5_ACTOR"), 10, 64)
-	f := &Funds{Grabber: &Grabber{DB: db, IDs: ids}, Send: func(context.Context, FundEvent) (func(bool) error, error) {
+	f := newTestFunds(&Grabber{DB: db, IDs: ids}, func(context.Context, FundEvent) (func(bool) error, error) {
 		return func(bool) error { return nil }, nil
-	}}
+	})
 	ready := func() { fmt.Println("D5_READY"); select {} }
 	before := func(*sql.Tx) error {
 		if stage == "before_commit" {
@@ -919,7 +990,7 @@ func TestD5CrashHelper(t *testing.T) {
 		return nil
 	}
 	if stage == "recovery_claimed" {
-		tasks, e := f.claimRecovery(ctx)
+		tasks, e := f.store.ClaimRecovery(ctx)
 		if e != nil || len(tasks) != 1 {
 			t.Fatal(tasks, e)
 		}

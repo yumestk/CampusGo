@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/yumestk/CampusGo/internal/application"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -86,7 +87,7 @@ func run(logger *slog.Logger) error {
 	go func() { defer close(hubDone); hub.Run(hubCtx) }()
 	defer func() { stopHub(); <-hubDone }()
 	mq := &fundmq.Client{Namespace: dbName}
-	funds := &errand.Funds{Grabber: g, Send: mq.Send, Events: errand.NewFundMetrics(registry)}
+	funds := &application.Funds{Store: &errand.FundStore{DB: db, IDs: ids}, Send: mq.Send, Record: errand.NewFundRecorder(registry)}
 	pushCtx, stopPush := context.WithCancel(ctx)
 	pushDone := make(chan struct{})
 	go func() {

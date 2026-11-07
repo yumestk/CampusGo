@@ -3,54 +3,25 @@ package errand
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/yumestk/CampusGo/internal/application"
+	"github.com/yumestk/CampusGo/internal/contracts"
 	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 	walletdomain "github.com/yumestk/CampusGo/internal/domain/wallet"
+	"github.com/yumestk/CampusGo/internal/platform/idgen"
 	"math"
 	"sort"
 
 	"github.com/google/uuid"
-	"github.com/prometheus/client_golang/prometheus"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 )
 
-type FundCommand struct {
-	ErrandID int64  `json:"errandId,string"`
-	Round    int    `json:"round"`
-	Action   string `json:"action"`
-}
-type FundEvent struct {
-	RequestID   string `json:"requestId"`
-	CampusID    int64  `json:"campusId,string"`
-	ErrandID    int64  `json:"errandId,string"`
-	ActorID     int64  `json:"actorId,string"`
-	PublisherID int64  `json:"publisherId,string"`
-	RunnerID    int64  `json:"runnerId,string"`
-	Round       int    `json:"round"`
-	Kind        string `json:"kind"`
-	Amount      int64  `json:"amountCents,string"`
-	Commission  int64  `json:"commissionCents,string"`
-}
-type FundResult struct {
-	RequestID string `json:"requestId"`
-	State     string `json:"state"`
-	ErrandID  int64  `json:"errandId,string"`
-	Status    string `json:"status"`
-	ErrorCode string `json:"errorCode"`
-}
-
 // Send returns only after the broker confirms the half message. Resolution is
 // separate: an uncertain SQL COMMIT must leave the message for durable checking.
-type Funds struct {
-	Events  *prometheus.CounterVec
-	Grabber *Grabber
-	Send    func(context.Context, FundEvent) (func(bool) error, error)
-}
 
 func autoUUID(s string) string      { return uuid.NewSHA1(uuid.NameSpaceOID, []byte(s)).String() }
 func Commission(amount int64) int64 { return walletdomain.Commission(amount) }
@@ -89,13 +60,13 @@ func authorizeFund(ctx context.Context, tx *sql.Tx, u auth.User, c Card, action 
 	}
 	return nil
 }
-func (f *Funds) Result(ctx context.Context, u auth.User, key string) (FundResult, error) {
+func (f *FundStore) Result(ctx context.Context, u auth.User, key string) (FundResult, error) {
 	if !ValidRequestKey(key) {
 		return FundResult{}, fault.New("INVALID_REQUEST", 400)
 	}
 	r := FundResult{RequestID: key}
 	var payload []byte
-	err := f.Grabber.DB.QueryRowContext(ctx, "SELECT state,errand_id,error_code,payload FROM fund_request WHERE request_id=? AND actor_id=? AND campus_id=?", key, u.ID, u.CampusID).Scan(&r.State, &r.ErrandID, &r.ErrorCode, &payload)
+	err := f.DB.QueryRowContext(ctx, "SELECT state,errand_id,error_code,payload FROM fund_request WHERE request_id=? AND actor_id=? AND campus_id=?", key, u.ID, u.CampusID).Scan(&r.State, &r.ErrandID, &r.ErrorCode, &payload)
 	if errors.Is(err, sql.ErrNoRows) {
 		r.State = "NOT_OBSERVED"
 		return r, nil
@@ -112,62 +83,7 @@ func (f *Funds) Result(ctx context.Context, u auth.User, key string) (FundResult
 	}
 	return r, nil
 }
-func (f *Funds) Execute(ctx context.Context, u auth.User, key string, c FundCommand) (FundResult, error) {
-	r, err := f.execute(ctx, u, key, c, nil, nil)
-	outcome := r.State
-	if err != nil {
-		outcome = "ERROR"
-	}
-	if outcome == "" {
-		outcome = "UNKNOWN"
-	}
-	f.record("execute", outcome)
-	return r, err
-}
-func (f *Funds) execute(ctx context.Context, u auth.User, key string, c FundCommand, beforeCommit func(*sql.Tx) error, commit func(*sql.Tx) error) (FundResult, error) {
-	if !ValidRequestKey(key) || !validFundCommand(u, c) {
-		return FundResult{}, fault.New("INVALID_REQUEST", 400)
-	}
-	data, _ := json.Marshal(c)
-	hash := sha256.Sum256(data)
-	event, existing, err := f.prepare(ctx, u, key, c, hash[:])
-	if err != nil {
-		return FundResult{}, err
-	}
-	if existing != nil {
-		return fundOutcome(*existing)
-	}
-	if f.Send == nil {
-		return FundResult{}, fault.New("DEPENDENCY_UNAVAILABLE", 503)
-	}
-	resolve, err := f.Send(ctx, event)
-	if err != nil {
-		// Do not execute SQL on an ambiguous half-message send. PREPARED can be retried
-		// with the same key; expiry is fenced under the same row lock as execution.
-		return FundResult{}, &fault.Error{Code: "FUND_RESULT_UNKNOWN", Status: 503, Cause: err}
-	}
-	r, err := f.executeSQL(ctx, u, event, hash[:], beforeCommit, commit)
-	// executeSQL has already rolled its transaction back on a known posting
-	// rejection. Persist the rejection separately; never do this for COMMIT errors.
-	var rejection *fault.Error
-	if errors.As(err, &rejection) && rejection.Status == 409 && r.State == "PREPARED" {
-		if _, e := f.Grabber.DB.ExecContext(ctx, "UPDATE fund_request SET state='ABORTED',error_code=? WHERE request_id=? AND state='PREPARED'", rejection.Code, event.RequestID); e != nil {
-			return r, &fault.Error{Code: "FUND_RESULT_UNKNOWN", Status: 503, Cause: e}
-		}
-	}
-	// Only durable known states resolve. No-row, unavailable DB and in-flight SQL
-	// stay UNKNOWN; a failed commit acknowledgment is never treated as rollback.
-	state := f.Check(ctx, event)
-	if state == "COMMIT" {
-		_ = resolve(true)
-	} else if state == "ROLLBACK" {
-		_ = resolve(false)
-	}
-	if err != nil {
-		return r, err
-	}
-	return fundOutcome(r)
-}
+
 func fundOutcome(r FundResult) (FundResult, error) {
 	if r.State == "ABORTED" {
 		code := r.ErrorCode
@@ -178,8 +94,8 @@ func fundOutcome(r FundResult) (FundResult, error) {
 	}
 	return r, nil
 }
-func (f *Funds) prepare(ctx context.Context, u auth.User, key string, c FundCommand, hash []byte) (FundEvent, *FundResult, error) {
-	tx, err := f.Grabber.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+func (f *FundStore) Prepare(ctx context.Context, u auth.User, key string, c FundCommand, hash []byte) (FundEvent, *FundResult, error) {
+	tx, err := f.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return FundEvent{}, nil, fault.Dependency(err)
 	}
@@ -247,13 +163,14 @@ func (f *Funds) prepare(ctx context.Context, u auth.User, key string, c FundComm
 		return event, nil, &fault.Error{Code: "FUND_RESULT_UNKNOWN", Status: 503, Cause: err}
 	}
 	if n != 1 {
-		return f.prepare(ctx, u, key, c, hash)
+		return f.Prepare(ctx, u, key, c, hash)
 	}
 	return event, nil, nil
 }
-func (f *Funds) executeSQL(ctx context.Context, u auth.User, e FundEvent, hash []byte, beforeCommit func(*sql.Tx) error, commit func(*sql.Tx) error) (FundResult, error) {
+func (f *FundStore) Apply(ctx context.Context, u auth.User, e FundEvent, hash []byte, plan application.SettlementPlan) (FundResult, error) {
+	beforeCommit, commit := f.beforeCommit, f.commit
 	r := FundResult{RequestID: e.RequestID, ErrandID: e.ErrandID}
-	tx, err := f.Grabber.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	tx, err := f.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return r, fault.Dependency(err)
 	}
@@ -339,17 +256,14 @@ func (f *Funds) executeSQL(ctx context.Context, u auth.User, e FundEvent, hash [
 	if amount != e.Amount || escrowState != "HELD" {
 		return r, fault.New("FUNDS_INCONSISTENT", 500)
 	}
-	if err = f.post(ctx, tx, e); err != nil {
+	if err = f.post(ctx, tx, e, plan.Allocation); err != nil {
 		var fe *fault.Error
 		if errors.As(err, &fe) {
 			return r, err
 		}
 		return r, fault.Dependency(err)
 	}
-	status, escrowTarget := fundStatus(e.Kind), "REFUNDED"
-	if status == "SETTLED" {
-		escrowTarget = "RELEASED"
-	}
+	status, escrowTarget := plan.Status, plan.EscrowStatus
 	if _, err = tx.ExecContext(ctx, "UPDATE escrow_order SET status=? WHERE errand_id=?", escrowTarget, e.ErrandID); err != nil {
 		return r, fault.Dependency(err)
 	}
@@ -359,10 +273,8 @@ func (f *Funds) executeSQL(ctx context.Context, u auth.User, e FundEvent, hash [
 	if err = transitionEffects(ctx, tx, card, status, e.Round, u.ID); err != nil {
 		return r, fault.Dependency(err)
 	}
-	if status == "SETTLED" {
-		err = applyCredit(ctx, tx, e.RunnerID, e.ErrandID, e.Round, "SETTLE", 2)
-	} else if e.Kind == "ARBITRATE_PUBLISHER" {
-		err = applyCredit(ctx, tx, e.RunnerID, e.ErrandID, e.Round, "DISPUTE_LOSE", -8)
+	if plan.CreditKind != "" {
+		err = applyCredit(ctx, tx, e.RunnerID, e.ErrandID, e.Round, plan.CreditKind, plan.CreditDelta)
 	}
 	if err != nil {
 		return r, fault.Dependency(err)
@@ -385,7 +297,7 @@ func (f *Funds) executeSQL(ctx context.Context, u auth.User, e FundEvent, hash [
 	r.Status = status
 	return r, nil
 }
-func (f *Funds) post(ctx context.Context, tx *sql.Tx, e FundEvent) error {
+func (f *FundStore) post(ctx context.Context, tx *sql.Tx, e FundEvent, allocation walletdomain.Allocation) error {
 	type posting struct {
 		id, amount      int64
 		direction, kind string
@@ -399,9 +311,9 @@ func (f *Funds) post(ctx context.Context, tx *sql.Tx, e FundEvent) error {
 	if err := tx.QueryRowContext(ctx, "SELECT id FROM wallet_account WHERE owner_id=? AND owner_type='USER'", target).Scan(&targetID); err != nil {
 		return err
 	}
-	legs := []posting{{1, e.Amount, "DEBIT", "ESCROW", -1}, {targetID, e.Amount - e.Commission, "CREDIT", "USER", target}}
-	if e.Commission > 0 {
-		legs = append(legs, posting{2, e.Commission, "CREDIT", "COMMISSION", -2})
+	legs := []posting{{1, e.Amount, "DEBIT", "ESCROW", -1}, {targetID, allocation.Recipient, "CREDIT", "USER", target}}
+	if allocation.Commission > 0 {
+		legs = append(legs, posting{2, allocation.Commission, "CREDIT", "COMMISSION", -2})
 	}
 	sort.Slice(legs, func(i, j int) bool { return legs[i].id < legs[j].id })
 	for _, leg := range legs {
@@ -422,7 +334,7 @@ func (f *Funds) post(ctx context.Context, tx *sql.Tx, e FundEvent) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE wallet_account SET available=?,version=version+1 WHERE id=?", after, leg.id); err != nil {
 			return err
 		}
-		ledgerID, err := f.Grabber.IDs.Next(ctx)
+		ledgerID, err := f.IDs.Next(ctx)
 		if err != nil {
 			return err
 		}
@@ -432,4 +344,19 @@ func (f *Funds) post(ctx context.Context, tx *sql.Tx, e FundEvent) error {
 		}
 	}
 	return nil
+}
+
+type FundStore struct {
+	DB           *sql.DB
+	IDs          *idgen.Generator
+	beforeCommit func(*sql.Tx) error
+	commit       func(*sql.Tx) error
+}
+type FundCommand = contracts.FundCommand
+type FundEvent = contracts.FundEvent
+type FundResult = contracts.FundResult
+
+func (f *FundStore) Reject(ctx context.Context, key, code string) error {
+	_, err := f.DB.ExecContext(ctx, "UPDATE fund_request SET state='ABORTED',error_code=? WHERE request_id=? AND state='PREPARED'", code, key)
+	return err
 }

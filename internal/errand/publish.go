@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/yumestk/CampusGo/internal/application"
 	"math"
 	"strings"
 	"unicode"
@@ -35,7 +36,7 @@ type PublishResult struct {
 	ErrorCode   string `json:"errorCode"`
 }
 type Publisher struct {
-	Funds *Funds
+	Funds *application.Funds
 	DB    *sql.DB
 	IDs   *idgen.Generator
 }

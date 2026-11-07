@@ -11,6 +11,7 @@ import (
 	rmq "github.com/apache/rocketmq-clients/golang/v5"
 	"github.com/apache/rocketmq-clients/golang/v5/credentials"
 	v2 "github.com/apache/rocketmq-clients/golang/v5/protocol/v2"
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/errand"
 )
 
@@ -62,7 +63,7 @@ func (c *Client) Send(ctx context.Context, e errand.FundEvent) (func(bool) error
 		return e
 	}, nil
 }
-func (c *Client) Run(ctx context.Context, f *errand.Funds, endpoint string, consume bool, onError func(error)) {
+func (c *Client) Run(ctx context.Context, f *application.Funds, endpoint string, consume bool, onError func(error)) {
 	for ctx.Err() == nil {
 		if err := c.session(ctx, f, endpoint, consume, onError); err != nil && ctx.Err() == nil {
 			onError(err)
@@ -76,7 +77,7 @@ func (c *Client) Run(ctx context.Context, f *errand.Funds, endpoint string, cons
 		}
 	}
 }
-func (c *Client) session(ctx context.Context, f *errand.Funds, endpoint string, consume bool, onError func(error)) error {
+func (c *Client) session(ctx context.Context, f *application.Funds, endpoint string, consume bool, onError func(error)) error {
 	p, err := rmq.NewProducer(&rmq.Config{Endpoint: endpoint, Credentials: &credentials.SessionCredentials{}}, rmq.WithTopics(Topic), rmq.WithTransactionChecker(&rmq.TransactionChecker{Check: func(m *rmq.MessageView) rmq.TransactionResolution {
 		if m.GetTag() == nil || *m.GetTag() != c.Namespace {
 			return rmq.UNKNOWN
@@ -124,7 +125,7 @@ func (c *Client) session(ctx context.Context, f *errand.Funds, endpoint string, 
 
 // RunPush has no producer and never gates funds.Send availability. A broken
 // realtime subscription must not withdraw the business transaction producer.
-func RunPush(ctx context.Context, f *errand.Funds, endpoint, namespace string, push func(context.Context, errand.FundEvent) error, onError func(error)) {
+func RunPush(ctx context.Context, f *application.Funds, endpoint, namespace string, push func(context.Context, errand.FundEvent) error, onError func(error)) {
 	for ctx.Err() == nil {
 		if err := consumeSession(ctx, f, endpoint, "campusgo-funds-push-"+namespace, namespace, nil, push, onError); err != nil && ctx.Err() == nil {
 			onError(err)
@@ -136,7 +137,7 @@ func RunPush(ctx context.Context, f *errand.Funds, endpoint, namespace string, p
 		}
 	}
 }
-func consumeSession(ctx context.Context, f *errand.Funds, endpoint, group, namespace string, restart <-chan struct{}, push func(context.Context, errand.FundEvent) error, onError func(error)) error {
+func consumeSession(ctx context.Context, f *application.Funds, endpoint, group, namespace string, restart <-chan struct{}, push func(context.Context, errand.FundEvent) error, onError func(error)) error {
 	consumer, err := rmq.NewSimpleConsumer(&rmq.Config{Endpoint: endpoint, ConsumerGroup: group, Credentials: &credentials.SessionCredentials{}}, rmq.WithSimpleAwaitDuration(6*time.Second), rmq.WithSimpleSubscriptionExpressions(map[string]*rmq.FilterExpression{Topic: rmq.NewFilterExpression(namespace)}))
 	if err != nil {
 		return err
