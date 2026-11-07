@@ -2,17 +2,18 @@ package httpapi
 
 import (
 	"database/sql"
+	"github.com/yumestk/CampusGo/internal/application"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"github.com/yumestk/CampusGo/internal/transport/wire"
 	"github.com/yumestk/CampusGo/internal/wallet"
 )
 
-func registerFunds(api *gin.RouterGroup, p *errand.Publisher, db *sql.DB) {
+func registerFunds(api *gin.RouterGroup, p *application.Publisher, db *sql.DB) {
 	q := wallet.Query{DB: db}
 	api.POST("/errands", func(c *gin.Context) {
 		u := c.MustGet("user").(auth.User)

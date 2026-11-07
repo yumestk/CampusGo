@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"context"
@@ -40,7 +40,7 @@ func scanRepair(row scanner) (RepairTask, error) {
 	err := row.Scan(&r.ID, &r.CampusID, &r.ErrandID, &r.EventKey, &r.Kind, &r.RequestID, &r.State, &r.Attempts, &r.ReplayCount, &r.WorkerToken, &r.LastError, &r.ReplayReason)
 	return r, err
 }
-func (g *Grabber) ClaimRepairs(ctx context.Context, limit int) ([]RepairTask, error) {
+func (g *TaskStore) ClaimRepairs(ctx context.Context, limit int) ([]RepairTask, error) {
 	if limit < 1 || limit > 100 {
 		return nil, fmt.Errorf("repair limit must be in [1,100]")
 	}
@@ -88,7 +88,7 @@ func (g *Grabber) ClaimRepairs(ctx context.Context, limit int) ([]RepairTask, er
 	}
 	return claimed, nil
 }
-func (g *Grabber) CompleteRepair(ctx context.Context, r RepairTask, cause error) (bool, error) {
+func (g *TaskStore) CompleteRepair(ctx context.Context, r RepairTask, cause error) (bool, error) {
 	var result sql.Result
 	var err error
 	if cause == nil {
@@ -104,7 +104,7 @@ func (g *Grabber) CompleteRepair(ctx context.Context, r RepairTask, cause error)
 	n, err := result.RowsAffected()
 	return n == 1, err
 }
-func (g *Grabber) repair(ctx context.Context, r RepairTask) error {
+func (g *TaskStore) repair(ctx context.Context, r RepairTask) error {
 	switch r.Kind {
 	case "PROJECTION":
 		return g.syncProjection(ctx, r.ErrandID)
@@ -129,7 +129,7 @@ func (g *Grabber) repair(ctx context.Context, r RepairTask) error {
 		return fmt.Errorf("unknown repair kind")
 	}
 }
-func (g *Grabber) RecoverBatch(ctx context.Context, limit int) error {
+func (g *TaskStore) RecoverBatch(ctx context.Context, limit int) error {
 	if limit < 1 || limit > 100 {
 		return fmt.Errorf("recovery limit must be in [1,100]")
 	}
@@ -172,7 +172,7 @@ func (g *Grabber) RecoverBatch(ctx context.Context, limit int) error {
 // Keyset scan covers Redis eviction, a full Redis restart, and missing repair
 // registrations left by an old application. Each worker may scan independently;
 // SQL event uniqueness and fenced projection scripts make duplicates harmless.
-func (g *Grabber) ReconcileBatch(ctx context.Context, after int64, limit int) (int64, error) {
+func (g *TaskStore) ReconcileBatch(ctx context.Context, after int64, limit int) (int64, error) {
 	if after < 0 || limit < 1 || limit > 100 {
 		return after, fmt.Errorf("invalid reconciliation cursor or limit")
 	}
@@ -254,7 +254,7 @@ func (g *Grabber) ReconcileBatch(ctx context.Context, after int64, limit int) (i
 	}
 	return next, nil
 }
-func (g *Grabber) DeadRepairs(ctx context.Context) ([]RepairTask, error) {
+func (g *TaskStore) DeadRepairs(ctx context.Context) ([]RepairTask, error) {
 	rows, err := g.DB.QueryContext(ctx, "SELECT "+repairColumns+" FROM grab_repair_task WHERE state='DEAD' ORDER BY id LIMIT 100")
 	if err != nil {
 		return nil, err
@@ -270,7 +270,7 @@ func (g *Grabber) DeadRepairs(ctx context.Context) ([]RepairTask, error) {
 	}
 	return tasks, rows.Err()
 }
-func (g *Grabber) ReplayRepair(ctx context.Context, id int64, reason string) (bool, error) {
+func (g *TaskStore) ReplayRepair(ctx context.Context, id int64, reason string) (bool, error) {
 	reason = strings.TrimSpace(reason)
 	if reason == "" || len(reason) > 200 || strings.ContainsAny(reason, "\n\r") {
 		return false, fmt.Errorf("replay requires a 1-200 byte single-line reason")
@@ -282,7 +282,7 @@ func (g *Grabber) ReplayRepair(ctx context.Context, id int64, reason string) (bo
 	n, err := r.RowsAffected()
 	return n == 1, err
 }
-func (g *Grabber) RunRecovery(ctx context.Context, onError func(error)) {
+func (g *TaskStore) RunRecovery(ctx context.Context, onError func(error)) {
 	timer := time.NewTicker(time.Second)
 	defer timer.Stop()
 	var cursor int64

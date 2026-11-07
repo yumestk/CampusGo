@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"github.com/google/uuid"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
 	"github.com/yumestk/CampusGo/internal/platform/rediscache"
@@ -57,9 +57,9 @@ func TestIntegrationD5HTTP(t *testing.T) {
 		t.Fatal(e)
 	}
 	defer s.Logout(ctx, runner.Token)
-	g := &errand.Grabber{DB: db, Redis: cache, IDs: ids, Namespace: "campusgo_verification"}
+	g := &errand.TaskStore{DB: db, Redis: cache, IDs: ids, Namespace: "campusgo_verification"}
 	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
-	RegisterBusiness(router, s, errand.Query{DB: db}, &errand.Publisher{DB: db, IDs: ids}, g)
+	registerTestBusiness(router, s, errand.Query{DB: db}, &errand.PublishStore{DB: db, IDs: ids}, g)
 	path := fmt.Sprintf("/api/errands/%d/actions", id)
 	send := func(method, path, body, token string, keys ...string) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, path, strings.NewReader(body))

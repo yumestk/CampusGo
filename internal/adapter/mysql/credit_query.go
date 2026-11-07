@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"context"
@@ -32,7 +32,7 @@ type CreditRank struct {
 	Score  int   `json:"score"`
 }
 
-func (g *Grabber) CreditSelf(ctx context.Context, u auth.User) (CreditProfile, error) {
+func (g *TaskStore) CreditSelf(ctx context.Context, u auth.User) (CreditProfile, error) {
 	p := CreditProfile{Score: creditdomain.Base, WindowDays: creditdomain.WindowDays, Events: []CreditEvent{}}
 	tx, err := g.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
@@ -73,7 +73,7 @@ for i=1,#ARGV,2 do redis.call('ZADD',KEYS[1],ARGV[i],ARGV[i+1]) end
 redis.call('EXPIRE',KEYS[1],30)
 return 1`)
 
-func (g *Grabber) CreditRanking(ctx context.Context, u auth.User, campus int64, limit int) ([]CreditRank, error) {
+func (g *TaskStore) CreditRanking(ctx context.Context, u auth.User, campus int64, limit int) ([]CreditRank, error) {
 	if campus != u.CampusID {
 		return nil, fault.New("FORBIDDEN", 403)
 	}

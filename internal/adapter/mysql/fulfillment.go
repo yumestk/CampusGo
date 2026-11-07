@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"context"
@@ -14,13 +14,7 @@ import (
 
 // Fulfill uses the same runner-before-task lock order as confirmation. Transitions
 // releasing ongoing quota serialize with concurrent confirmations of other tasks.
-func (g *Grabber) Fulfill(ctx context.Context, u auth.User, id int64, round int, action string) (Card, error) {
-	if id <= 0 || round < 0 || round > 2147483647 {
-		return Card{}, fault.New("INVALID_REQUEST", 400)
-	}
-	if action != "PICK_UP" && action != "DELIVER" && action != "DISPUTE" && action != "CANCEL_DRAFT" {
-		return Card{}, fault.New("INVALID_REQUEST", 400)
-	}
+func (g *TaskStore) ApplyFulfill(ctx context.Context, u auth.User, id int64, round int, action string) (Card, error) {
 	preview, err := scan(g.DB.QueryRowContext(ctx, "SELECT "+columns+" FROM errand WHERE id=? AND campus_id=?", id, u.CampusID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Card{}, fault.New("ERRAND_NOT_FOUND", 404)
@@ -123,10 +117,10 @@ func applyCredit(ctx context.Context, tx *sql.Tx, user, id int64, round int, kin
 	_, err = tx.ExecContext(ctx, "INSERT INTO credit_score(user_id,score,version) VALUES (?,?,1) ON DUPLICATE KEY UPDATE score=LEAST(?,GREATEST(?,score+?)),version=version+1", user, creditdomain.Clamp(creditdomain.Base+delta), creditdomain.Maximum, creditdomain.Minimum, delta)
 	return err
 }
-func (g *Grabber) calibrateUser(ctx context.Context, id int64) error {
+func (g *TaskStore) calibrateUser(ctx context.Context, id int64) error {
 	return g.recalibrate(ctx, id, false)
 }
-func (g *Grabber) recalibrate(ctx context.Context, id int64, dueOnly bool) error {
+func (g *TaskStore) recalibrate(ctx context.Context, id int64, dueOnly bool) error {
 	tx, err := g.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -171,7 +165,7 @@ func runEvery(ctx context.Context, d time.Duration, fn func(context.Context) err
 
 // Persisted oldest-first scheduling prevents a large calibration set from
 // starving users beyond one worker batch or across restarts.
-func (g *Grabber) CalibrateDueCredit(ctx context.Context) error {
+func (g *TaskStore) CalibrateDueCredit(ctx context.Context) error {
 	rows, err := g.DB.QueryContext(ctx, "SELECT user_id FROM credit_score WHERE last_calibrated_at<=TIMESTAMPADD(DAY,-1,CURRENT_TIMESTAMP(3)) ORDER BY last_calibrated_at,user_id LIMIT 100")
 	if err != nil {
 		return err

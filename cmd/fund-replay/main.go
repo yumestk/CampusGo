@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/yumestk/CampusGo/internal/errand"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 )
 

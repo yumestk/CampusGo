@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"bytes"

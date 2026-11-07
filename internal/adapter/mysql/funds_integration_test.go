@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"bufio"
@@ -59,11 +59,11 @@ func TestIntegrationD5(t *testing.T) {
 	}
 	defer cache.Close()
 	ids, _ := idgen.New(1016)
-	g := &Grabber{DB: db, Redis: cache, IDs: ids, Namespace: "campusgo_verification"}
-	p := &Publisher{DB: db, IDs: ids}
+	g := &TaskStore{DB: db, Redis: cache, IDs: ids, Namespace: "campusgo_verification"}
+	p := &PublishStore{DB: db, IDs: ids}
 	manifest := func(kind string, id int64) {
 		t.Helper()
-		file, e := os.OpenFile(filepath.Join("..", "..", "work", "d5-fixtures.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		file, e := os.OpenFile(filepath.Join("..", "..", "..", "work", "d5-fixtures.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -124,7 +124,7 @@ func TestIntegrationD5(t *testing.T) {
 	accepted := func(amount int64) int64 {
 		t.Helper()
 		id := newTask(amount)
-		if _, e := g.Grab(ctx, runner, uuid.NewString(), GrabCommand{id, 0}); e != nil {
+		if _, e := g.Grab(ctx, runner, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 0}); e != nil {
 			t.Fatal(e)
 		}
 		if _, e := g.Confirm(ctx, runner, id, 0); e != nil {
@@ -177,7 +177,7 @@ func TestIntegrationD5(t *testing.T) {
 	}
 
 	t.Run("pre_refactor_persisted_requests_messages_replay_and_check", func(t *testing.T) {
-		body, e := os.ReadFile(filepath.Join("..", "contracts", "testdata", "pre-refactor-funds.json"))
+		body, e := os.ReadFile(filepath.Join("..", "..", "contracts", "testdata", "pre-refactor-funds.json"))
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -520,7 +520,7 @@ func TestIntegrationD5(t *testing.T) {
 			t.Fatal(x)
 		}
 		closed.Close()
-		unavailable := newTestFunds(&Grabber{DB: closed}, nil)
+		unavailable := newTestFunds(&TaskStore{DB: closed}, nil)
 		if unavailable.Check(ctx, e) != "UNKNOWN" {
 			t.Fatal("DB failure rolled back")
 		}
@@ -700,7 +700,7 @@ func TestIntegrationD5(t *testing.T) {
 		id := delivered(1001)
 		key := uuid.NewString()
 		addr, dropped := commitAckProxyAt(t, 2)
-		proxied := newTestFunds(&Grabber{DB: databaseViaProxy(t, addr), IDs: ids}, sender)
+		proxied := newTestFunds(&TaskStore{DB: databaseViaProxy(t, addr), IDs: ids}, sender)
 		_, e := proxied.Execute(ctx, publisher, key, command(id, "SETTLE"))
 		requireCode(t, e, "FUND_RESULT_UNKNOWN")
 		select {
@@ -970,7 +970,7 @@ func TestD5CrashHelper(t *testing.T) {
 	ids, _ := idgen.New(1014)
 	id, _ := strconv.ParseInt(os.Getenv("CAMPUSGO_D5_TASK"), 10, 64)
 	actor, _ := strconv.ParseInt(os.Getenv("CAMPUSGO_D5_ACTOR"), 10, 64)
-	f := newTestFunds(&Grabber{DB: db, IDs: ids}, func(context.Context, FundEvent) (func(bool) error, error) {
+	f := newTestFunds(&TaskStore{DB: db, IDs: ids}, func(context.Context, FundEvent) (func(bool) error, error) {
 		return func(bool) error { return nil }, nil
 	})
 	ready := func() { fmt.Println("D5_READY"); select {} }

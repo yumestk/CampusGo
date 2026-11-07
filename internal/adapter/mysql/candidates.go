@@ -1,6 +1,8 @@
-package errand
+package mysql
 
 import (
+	"github.com/yumestk/CampusGo/internal/contracts"
+
 	"context"
 	"fmt"
 	"strconv"
@@ -11,13 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-type Candidate struct {
-	RunnerID int64
-	Round    int
-	Token    string
-}
-
-func (g *Grabber) candidateKeys(id int64) []string {
+func (g *TaskStore) candidateKeys(id int64) []string {
 	return []string{fmt.Sprintf("campusgo:%s:candidates:{%d}", g.Namespace, id), fmt.Sprintf("campusgo:%s:candidate-meta:{%d}", g.Namespace, id)}
 }
 
@@ -37,7 +33,7 @@ var removeCandidate = redis.NewScript(`
 if redis.call('HGET',KEYS[2],ARGV[1])~=ARGV[2] then return 0 end
 redis.call('ZREM',KEYS[1],ARGV[1]);redis.call('HDEL',KEYS[2],ARGV[1]);return 1`)
 
-func (g *Grabber) offerCandidate(ctx context.Context, r grabRequest) error {
+func (g *TaskStore) offerCandidate(ctx context.Context, r grabRequest) error {
 	var score int
 	// A late rejection can only offer for its original live cycle/round. Eligibility
 	// is checked again under the user lock at promotion; this queue is a preference.
@@ -50,7 +46,7 @@ func (g *Grabber) offerCandidate(ctx context.Context, r grabRequest) error {
 	}
 	return offerCandidate.Run(ctx, g.Redis, g.candidateKeys(r.ErrandID), fmt.Sprint(r.RunnerID), float64(time.Now().UnixMilli())-float64(min(score, 100))*10, r.Round, uuid.NewString()).Err()
 }
-func (g *Grabber) peekCandidate(ctx context.Context, id int64) (*Candidate, error) {
+func (g *TaskStore) peekCandidate(ctx context.Context, id int64) (*Candidate, error) {
 	row, err := peekCandidate.Run(ctx, g.Redis, g.candidateKeys(id)).StringSlice()
 	if err != nil {
 		return nil, err
@@ -73,8 +69,10 @@ func (g *Grabber) peekCandidate(ctx context.Context, id int64) (*Candidate, erro
 	if e != nil {
 		return nil, e
 	}
-	return &Candidate{runner, round, parts[1]}, nil
+	return &Candidate{RunnerID: runner, Round: round, Token: parts[1]}, nil
 }
-func (g *Grabber) removeCandidate(ctx context.Context, id int64, c Candidate) error {
+func (g *TaskStore) removeCandidate(ctx context.Context, id int64, c Candidate) error {
 	return removeCandidate.Run(ctx, g.Redis, g.candidateKeys(id), fmt.Sprint(c.RunnerID), fmt.Sprintf("%d:%s", c.Round, c.Token)).Err()
 }
+
+type Candidate = contracts.Candidate

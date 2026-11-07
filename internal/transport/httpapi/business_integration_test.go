@@ -16,8 +16,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
 	"github.com/yumestk/CampusGo/internal/platform/rediscache"
@@ -41,7 +41,7 @@ func TestIntegrationHTTPIdentityAndQueries(t *testing.T) {
 	s := &auth.Service{DB: db, Redis: cache, Config: auth.Config{Environment: "test", Namespace: uuid.NewString(), Demo: true, SessionTTL: time.Minute}}
 	router := NewRouter(slog.New(slog.NewJSONHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
 	ids, _ := idgen.New(1020)
-	RegisterBusiness(router, s, errand.Query{DB: db}, &errand.Publisher{DB: db, IDs: ids})
+	registerTestBusiness(router, s, errand.Query{DB: db}, &errand.PublishStore{DB: db, IDs: ids})
 	request := func(method, path, token, body string) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -141,7 +141,7 @@ func TestIntegrationHTTPIdentityAndQueries(t *testing.T) {
 	broken.Redis = redis.NewClient(&redis.Options{Addr: address, MaxRetries: -1, DialTimeout: 100 * time.Millisecond})
 	defer broken.Redis.Close()
 	failedRouter := NewRouter(slog.New(slog.NewJSONHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
-	RegisterBusiness(failedRouter, &broken, errand.Query{DB: db}, &errand.Publisher{DB: db, IDs: ids})
+	registerTestBusiness(failedRouter, &broken, errand.Query{DB: db}, &errand.PublishStore{DB: db, IDs: ids})
 	r := httptest.NewRequest("GET", "/api/users/me", nil)
 	r.Header.Set("Authorization", "Bearer "+tokens[1001])
 	w := httptest.NewRecorder()

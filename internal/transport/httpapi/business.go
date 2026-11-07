@@ -17,8 +17,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/notify"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"github.com/yumestk/CampusGo/internal/transport/wire"
@@ -81,7 +81,7 @@ func bearer(c *gin.Context) string {
 	}
 	return parts[1]
 }
-func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, p *errand.Publisher, grabbers ...*errand.Grabber) {
+func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, services BusinessServices) {
 	api := router.Group("/api")
 	api.Use(func(c *gin.Context) {
 		if s.Config.RequireGateway && (len(c.Request.Header.Values("X-CampusGo-Gateway")) != 1 || subtle.ConstantTimeCompare([]byte(c.GetHeader("X-CampusGo-Gateway")), []byte(s.Config.GatewaySecret)) != 1) {
@@ -190,14 +190,11 @@ func RegisterBusiness(router *gin.Engine, s *auth.Service, q errand.Query, p *er
 	})
 	registerNotifications(protected, q.DB)
 	protected.GET("/users/me", func(c *gin.Context) { ok(c, c.MustGet("user")) })
-	registerFunds(protected, p, q.DB)
-	if len(grabbers) > 0 && grabbers[0] != nil {
-		registerGrab(protected, grabbers[0])
-		f := p.Funds
-		if f == nil {
-			f = &application.Funds{Store: &errand.FundStore{DB: q.DB, IDs: grabbers[0].IDs}}
-		}
-		registerFulfillment(protected, grabbers[0], f)
+
+	registerFunds(protected, services.Publisher, q.DB)
+	if services.Grab != nil {
+		registerGrab(protected, services.Grab, services.Lifecycle)
+		registerFulfillment(protected, services.Lifecycle, services.Funds, services.Credit)
 	}
 	list := func(c *gin.Context, mine bool) {
 		u := c.MustGet("user").(auth.User)
@@ -293,4 +290,14 @@ func RegisterRealtime(router *gin.Engine, s *auth.Service, h *notify.Hub) {
 		}
 		h.ServeHTTP(c.Writer, c.Request)
 	})
+}
+
+// BusinessServices is assembled explicitly by cmd/api and the HTTP fixtures.
+// Controllers never construct a writer or silently substitute missing storage.
+type BusinessServices struct {
+	Publisher *application.Publisher
+	Grab      *application.Grab
+	Lifecycle *application.Lifecycle
+	Funds     *application.Funds
+	Credit    *errand.TaskStore
 }

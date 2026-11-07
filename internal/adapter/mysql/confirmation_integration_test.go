@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"bufio"
@@ -41,10 +41,10 @@ func TestIntegrationD4(t *testing.T) {
 	t.Cleanup(func() { cache.Close() })
 	ids, _ := idgen.New(1018)
 	namespace := "d4-" + uuid.NewString()
-	g := &Grabber{DB: db, Redis: cache, IDs: ids, Namespace: namespace}
+	g := &TaskStore{DB: db, Redis: cache, IDs: ids, Namespace: namespace}
 	manifest := func(kind string, id int64) {
 		t.Helper()
-		f, e := os.OpenFile(filepath.Join("..", "..", "work", "d4-fixtures.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		f, e := os.OpenFile(filepath.Join("..", "..", "..", "work", "d4-fixtures.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -129,7 +129,7 @@ func TestIntegrationD4(t *testing.T) {
 	locked := func(u auth.User) int64 {
 		t.Helper()
 		id := newTask()
-		r, e := g.Grab(ctx, u, uuid.NewString(), GrabCommand{id, 0})
+		r, e := g.Grab(ctx, u, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 0})
 		if e != nil || r.State != "SUCCEEDED" {
 			t.Fatal(r, e)
 		}
@@ -155,7 +155,7 @@ func TestIntegrationD4(t *testing.T) {
 		if e := offerCandidate.Run(ctx, cache, g.candidateKeys(id), fmt.Sprint(u.ID), score, round, token).Err(); e != nil {
 			t.Fatal(e)
 		}
-		return Candidate{u.ID, round, token}
+		return Candidate{RunnerID: u.ID, Round: round, Token: token}
 	}
 	t.Run("confirmation_authority_round_deadline_and_replay", func(t *testing.T) {
 		id := locked(runner)
@@ -224,7 +224,7 @@ func TestIntegrationD4(t *testing.T) {
 		assertStatus(id, "LOCKED", 1, next.ID)
 		fresh := locked(newUser(1))
 		candidate := newUser(1)
-		r, e := g.Grab(ctx, candidate, uuid.NewString(), GrabCommand{fresh, 0})
+		r, e := g.Grab(ctx, candidate, uuid.NewString(), GrabCommand{ErrandID: fresh, ExpectedRound: 0})
 		if e != nil || r.State != "REJECTED" {
 			t.Fatal(r, e)
 		}
@@ -240,7 +240,7 @@ func TestIntegrationD4(t *testing.T) {
 		broken := *g
 		broken.Redis = redis.NewClient(&redis.Options{Addr: "127.0.0.1:1", DialTimeout: time.Millisecond, MaxRetries: -1})
 		defer broken.Redis.Close()
-		r, e := broken.Grab(ctx, newUser(1), uuid.NewString(), GrabCommand{fresh, 0})
+		r, e := broken.Grab(ctx, newUser(1), uuid.NewString(), GrabCommand{ErrandID: fresh, ExpectedRound: 0})
 		if e != nil || r.State != "REJECTED" {
 			t.Fatal("candidate outage changed durable rejection", r, e)
 		}
@@ -369,7 +369,7 @@ func TestIntegrationD4(t *testing.T) {
 		}
 		old, next := newUser(1), newUser(1)
 		offer(id, old, 0, 0)
-		r, e := g.Grab(ctx, u, uuid.NewString(), GrabCommand{id, 1})
+		r, e := g.Grab(ctx, u, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 1})
 		if e != nil || r.State != "SUCCEEDED" {
 			t.Fatal(r, e)
 		}
@@ -399,7 +399,7 @@ func TestIntegrationD4(t *testing.T) {
 		}
 		assertStatus(id, "PUBLISHED", 6, 0)
 		u := newUser(1)
-		r, e := g.Grab(ctx, u, uuid.NewString(), GrabCommand{id, 6})
+		r, e := g.Grab(ctx, u, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 6})
 		if e != nil || r.State != "SUCCEEDED" {
 			t.Fatal(r, e)
 		}
@@ -717,7 +717,7 @@ func TestIntegrationD4(t *testing.T) {
 		}
 	})
 }
-func countRunner(t *testing.T, g *Grabber, id int64) int64 {
+func countRunner(t *testing.T, g *TaskStore, id int64) int64 {
 	t.Helper()
 	var r int64
 	if e := g.DB.QueryRow("SELECT grabber_id FROM errand WHERE id=?", id).Scan(&r); e != nil {
@@ -740,7 +740,7 @@ func TestD4CrashHelper(t *testing.T) {
 		t.Fatal(e)
 	}
 	ids, _ := idgen.New(1017)
-	g := &Grabber{DB: db, Redis: cache, IDs: ids, Namespace: os.Getenv("CAMPUSGO_D4_NAMESPACE")}
+	g := &TaskStore{DB: db, Redis: cache, IDs: ids, Namespace: os.Getenv("CAMPUSGO_D4_NAMESPACE")}
 	id, _ := strconv.ParseInt(os.Getenv("CAMPUSGO_D4_TASK"), 10, 64)
 	ready := func() { fmt.Println("D4_READY"); select {} }
 	if stage == "message_claimed" {

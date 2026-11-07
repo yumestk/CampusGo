@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import "github.com/prometheus/client_golang/prometheus"
 

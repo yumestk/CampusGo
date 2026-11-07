@@ -1,18 +1,17 @@
-package errand
+package mysql
 
 import (
+	"github.com/yumestk/CampusGo/internal/contracts"
+
 	"bytes"
 	"context"
-	"crypto/sha256"
+
 	"database/sql"
-	"encoding/json"
+
 	"errors"
 	"fmt"
-	"github.com/yumestk/CampusGo/internal/application"
+
 	"math"
-	"strings"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/yumestk/CampusGo/internal/auth"
@@ -20,46 +19,18 @@ import (
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
 )
 
-type PublishCommand struct {
-	CampusID    int64  `json:"campusId,string"`
-	Type        string `json:"type"`
-	Title       string `json:"title"`
-	RewardCents int64  `json:"rewardCents,string"`
-	SlotTotal   int    `json:"slotTotal"`
-}
-type PublishResult struct {
-	RequestKey  string `json:"requestKey"`
-	State       string `json:"state"`
-	ErrandID    *int64 `json:"errandId,string"`
-	Status      string `json:"status"`
-	FrozenCents int64  `json:"frozenCents,string"`
-	ErrorCode   string `json:"errorCode"`
-}
-type Publisher struct {
-	Funds *application.Funds
-	DB    *sql.DB
-	IDs   *idgen.Generator
+type PublishStore struct {
+	DB           *sql.DB
+	IDs          *idgen.Generator
+	beforeCommit func(*sql.Tx) error
+	commit       func(*sql.Tx) error
 }
 
 func ValidRequestKey(key string) bool {
 	parsed, err := uuid.Parse(key)
 	return err == nil && parsed != uuid.Nil && parsed.String() == key
 }
-func (c *PublishCommand) validate(u auth.User) error {
-	if c.CampusID != u.CampusID {
-		return fault.New("FORBIDDEN", 403)
-	}
-	c.Title = strings.TrimSpace(c.Title)
-	if c.RewardCents <= 0 || c.SlotTotal != 1 || !utf8.ValidString(c.Title) || utf8.RuneCountInString(c.Title) > 64 || c.Title == "" || strings.ContainsFunc(c.Title, unicode.IsControl) {
-		return fault.New("INVALID_REQUEST", 400)
-	}
-	switch c.Type {
-	case "DELIVERY", "BUY", "QUEUE", "OTHER":
-	default:
-		return fault.New("INVALID_REQUEST", 400)
-	}
-	return nil
-}
+
 func scanResult(row *sql.Row, key string) (PublishResult, []byte, error) {
 	r := PublishResult{RequestKey: key}
 	var fingerprint []byte
@@ -78,7 +49,7 @@ func scanResult(row *sql.Row, key string) (PublishResult, []byte, error) {
 const resultColumns = "fingerprint,state,errand_id,reward_amount,error_code"
 
 // A missing committed row is not proof of rollback: an earlier COMMIT may still be in flight.
-func (p *Publisher) Result(ctx context.Context, u auth.User, key string) (PublishResult, error) {
+func (p *PublishStore) Result(ctx context.Context, u auth.User, key string) (PublishResult, error) {
 	if !ValidRequestKey(key) {
 		return PublishResult{}, fault.New("INVALID_REQUEST", 400)
 	}
@@ -95,21 +66,10 @@ func (p *Publisher) Result(ctx context.Context, u auth.User, key string) (Publis
 	return r, nil
 }
 
-func (p *Publisher) Publish(ctx context.Context, u auth.User, key string, c PublishCommand) (PublishResult, error) {
-	return p.publish(ctx, u, key, c, nil, nil)
-}
-
 // Test hooks are package private: exercise rollback after writes and loss of an actual commit acknowledgment.
 // They are never configurable from HTTP, environment variables, or the production constructor.
-func (p *Publisher) publish(ctx context.Context, u auth.User, key string, c PublishCommand, beforeCommit func(*sql.Tx) error, commit func(*sql.Tx) error) (PublishResult, error) {
-	if !ValidRequestKey(key) {
-		return PublishResult{}, fault.New("INVALID_REQUEST", 400)
-	}
-	if err := c.validate(u); err != nil {
-		return PublishResult{}, err
-	}
-	data, _ := json.Marshal(c)
-	fingerprint := sha256.Sum256(data)
+func (p *PublishStore) ApplyPublish(ctx context.Context, u auth.User, key string, c PublishCommand, fingerprint []byte) (PublishResult, error) {
+	beforeCommit, commit := p.beforeCommit, p.commit
 	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return PublishResult{}, fault.Dependency(err)
@@ -117,7 +77,7 @@ func (p *Publisher) publish(ctx context.Context, u auth.User, key string, c Publ
 	defer tx.Rollback()
 	// The no-op upsert takes an exclusive unique-key lock immediately. A plain INSERT
 	// followed by SELECT FOR UPDATE upgrades duplicate-key shared locks and can deadlock replays.
-	inserted, err := tx.ExecContext(ctx, "INSERT INTO publish_request (publisher_id,request_key,fingerprint,state,reward_amount) VALUES (?,?,?,'PROCESSING',?) ON DUPLICATE KEY UPDATE request_key=request_key", u.ID, key, fingerprint[:], c.RewardCents)
+	inserted, err := tx.ExecContext(ctx, "INSERT INTO publish_request (publisher_id,request_key,fingerprint,state,reward_amount) VALUES (?,?,?,'PROCESSING',?) ON DUPLICATE KEY UPDATE request_key=request_key", u.ID, key, fingerprint, c.RewardCents)
 	if err != nil {
 		return PublishResult{}, fault.Dependency(err)
 	}
@@ -125,7 +85,7 @@ func (p *Publisher) publish(ctx context.Context, u auth.User, key string, c Publ
 	if err != nil {
 		return PublishResult{}, fault.Dependency(err)
 	}
-	if !bytes.Equal(stored, fingerprint[:]) {
+	if !bytes.Equal(stored, fingerprint) {
 		return PublishResult{}, fault.New("IDEMPOTENCY_CONFLICT", 409)
 	}
 	if storedResult.State == "SUCCEEDED" || storedResult.State == "REJECTED" {
@@ -221,7 +181,7 @@ func publishOutcome(r PublishResult) (PublishResult, error) {
 	}
 	return r, nil
 }
-func (p *Publisher) transfer(ctx context.Context, tx *sql.Tx, u auth.User, c PublishCommand, id, accountID int64, user, escrow lockedAccount) error {
+func (p *PublishStore) transfer(ctx context.Context, tx *sql.Tx, u auth.User, c PublishCommand, id, accountID int64, user, escrow lockedAccount) error {
 	if _, err := tx.ExecContext(ctx, "INSERT INTO errand (id,campus_id,publisher_id,type,title,reward_amount,slot_total,status) VALUES (?,?,?,?,?,?,1,'DRAFT')", id, u.CampusID, u.ID, c.Type, c.Title, c.RewardCents); err != nil {
 		return err
 	}
@@ -270,3 +230,7 @@ func (p *Publisher) transfer(ctx context.Context, tx *sql.Tx, u auth.User, c Pub
 	_, err = tx.ExecContext(ctx, "INSERT INTO errand_status_log (campus_id,errand_id,from_status,to_status,round,operator_id) VALUES (?,?,'DRAFT','PUBLISHED',0,?)", u.CampusID, id, u.ID)
 	return err
 }
+
+type PublishCommand = contracts.PublishCommand
+
+type PublishResult = contracts.PublishResult

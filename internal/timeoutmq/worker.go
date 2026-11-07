@@ -8,8 +8,8 @@ import (
 	rmq "github.com/apache/rocketmq-clients/golang/v5"
 	"github.com/apache/rocketmq-clients/golang/v5/credentials"
 	v2 "github.com/apache/rocketmq-clients/golang/v5/protocol/v2"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/application"
-	"github.com/yumestk/CampusGo/internal/errand"
 )
 
 const Topic = "campusgo-confirm-timeout"
@@ -17,9 +17,9 @@ const AutoTopic = "campusgo-auto-settle"
 
 // SQL scans run independently in the worker. Failure to connect or publish never
 // disables that recovery path. Group and tag isolate live and verification data.
-func Run(ctx context.Context, g *errand.Grabber, endpoint string, onError func(error), funds ...*application.Funds) {
+func Run(ctx context.Context, g *errand.TaskStore, timeouts *application.Timeouts, endpoint string, onError func(error), funds ...*application.Funds) {
 	for ctx.Err() == nil {
-		if err := session(ctx, g, endpoint, onError, funds...); err != nil && ctx.Err() == nil {
+		if err := session(ctx, g, timeouts, endpoint, onError, funds...); err != nil && ctx.Err() == nil {
 			onError(err)
 		}
 		timer := time.NewTimer(5 * time.Second)
@@ -31,7 +31,7 @@ func Run(ctx context.Context, g *errand.Grabber, endpoint string, onError func(e
 		}
 	}
 }
-func session(ctx context.Context, g *errand.Grabber, endpoint string, onError func(error), funds ...*application.Funds) error {
+func session(ctx context.Context, g *errand.TaskStore, timeouts *application.Timeouts, endpoint string, onError func(error), funds ...*application.Funds) error {
 	producer, err := rmq.NewProducer(&rmq.Config{Endpoint: endpoint, Credentials: &credentials.SessionCredentials{}}, rmq.WithTopics(Topic, AutoTopic))
 	if err != nil {
 		return err
@@ -99,7 +99,7 @@ func session(ctx context.Context, g *errand.Grabber, endpoint string, onError fu
 			if message.GetTopic() == AutoTopic && len(funds) > 0 {
 				_, e = funds[0].ConsumeAutoSettle(work, message.GetBody())
 			} else {
-				_, e = g.ConsumeTimeout(work, message.GetBody())
+				_, e = timeouts.ConsumeTimeout(work, message.GetBody())
 			}
 			if e == nil {
 				e = consumer.Ack(work, message)

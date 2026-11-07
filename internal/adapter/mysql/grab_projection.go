@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"context"
@@ -28,13 +28,13 @@ var projectionScripts = func() map[string]*redis.Script {
 	return scripts
 }()
 
-func (g *Grabber) stateKey(id int64) string {
+func (g *TaskStore) stateKey(id int64) string {
 	return fmt.Sprintf("campusgo:%s:grab:v2:{%d}:state", g.Namespace, id)
 }
-func (g *Grabber) revokedKey(r grabRequest) string {
+func (g *TaskStore) revokedKey(r grabRequest) string {
 	return fmt.Sprintf("campusgo:%s:grab:v2:{%d}:revoked:%d:%s", g.Namespace, r.ErrandID, r.ID, r.Token)
 }
-func (g *Grabber) script(ctx context.Context, name string, keys []string, args ...any) (int64, error) {
+func (g *TaskStore) script(ctx context.Context, name string, keys []string, args ...any) (int64, error) {
 	return projectionScripts[name].Run(ctx, g.Redis, keys, args...).Int64()
 }
 func projectionArgs(c Card) []any {
@@ -44,7 +44,7 @@ func projectionArgs(c Card) []any {
 	}
 	return []any{strconv.FormatInt(c.Version, 10), strconv.Itoa(c.Round), c.Status, strconv.Itoa(c.SlotTaken), owner}
 }
-func (g *Grabber) syncProjection(ctx context.Context, id int64) error {
+func (g *TaskStore) syncProjection(ctx context.Context, id int64) error {
 	c, err := scan(g.DB.QueryRowContext(ctx, "SELECT "+columns+" FROM errand WHERE id=?", id))
 	if err != nil {
 		return err
@@ -90,10 +90,10 @@ func (g *Grabber) syncProjection(ctx context.Context, id int64) error {
 	}
 	return nil
 }
-func (g *Grabber) acquire(ctx context.Context, r grabRequest) (int64, error) {
+func (g *TaskStore) acquire(ctx context.Context, r grabRequest) (int64, error) {
 	return g.script(ctx, "acquire_pending", []string{g.stateKey(r.ErrandID), g.revokedKey(r)}, strconv.FormatInt(r.ID, 10), r.Token, strconv.FormatInt(r.BaseVersion, 10), strconv.Itoa(r.Round), strconv.FormatInt(r.RunnerID, 10), r.LeaseUntil.UnixMilli())
 }
-func (g *Grabber) revoke(ctx context.Context, r grabRequest) error {
+func (g *TaskStore) revoke(ctx context.Context, r grabRequest) error {
 	_, err := g.script(ctx, "revoke_pending", []string{g.stateKey(r.ErrandID), g.revokedKey(r)}, strconv.FormatInt(r.ID, 10), r.Token, strconv.FormatInt(r.BaseVersion, 10), strconv.Itoa(r.Round), r.LeaseUntil.UnixMilli(), int64(time.Minute/time.Millisecond))
 	return err
 }

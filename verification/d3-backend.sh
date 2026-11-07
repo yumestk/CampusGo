@@ -9,6 +9,6 @@ for db in campusgo campusgo_verification; do
 done
 python3 verification/d3-cleanup.py
 trap 'python3 verification/d3-cleanup.py' EXIT
-CAMPUSGO_D3_INTEGRATION=1 go test -race -count=1 -p 1 -v ./internal/errand ./internal/transport/httpapi
+CAMPUSGO_D3_INTEGRATION=1 go test -race -count=1 -p 1 -v ./internal/adapter/mysql ./internal/transport/httpapi
 ./bin/reconcile -database campusgo_verification
 printf '%s\n' 'D3 SQL/Redis concurrency, lease fencing, COMMIT acknowledgment loss and SIGKILL recovery checks passed.'

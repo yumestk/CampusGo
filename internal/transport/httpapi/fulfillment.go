@@ -2,14 +2,14 @@ package httpapi
 
 import (
 	"github.com/gin-gonic/gin"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"strconv"
 )
 
-func registerFulfillment(api *gin.RouterGroup, g *errand.Grabber, f *application.Funds) {
+func registerFulfillment(api *gin.RouterGroup, g *application.Lifecycle, f *application.Funds, credit *errand.TaskStore) {
 	api.POST("/errands/:id/actions", func(c *gin.Context) {
 		id, err := positiveID(c.Param("id"))
 		if err != nil {
@@ -62,7 +62,7 @@ func registerFulfillment(api *gin.RouterGroup, g *errand.Grabber, f *application
 		ok(c, r)
 	})
 	self := func(c *gin.Context) {
-		p, err := g.CreditSelf(c.Request.Context(), c.MustGet("user").(auth.User))
+		p, err := credit.CreditSelf(c.Request.Context(), c.MustGet("user").(auth.User))
 		if err != nil {
 			fail(c, err)
 			return
@@ -79,7 +79,7 @@ func registerFulfillment(api *gin.RouterGroup, g *errand.Grabber, f *application
 			fail(c, fault.New("INVALID_REQUEST", 400))
 			return
 		}
-		p, err := g.CreditRanking(c.Request.Context(), u, campus, limit)
+		p, err := credit.CreditRanking(c.Request.Context(), u, campus, limit)
 		if err != nil {
 			fail(c, err)
 			return

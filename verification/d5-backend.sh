@@ -12,6 +12,6 @@ for db in campusgo campusgo_verification; do
 done
 python3 verification/d5-cleanup.py
 trap 'python3 verification/d5-cleanup.py' EXIT
-CAMPUSGO_D5_INTEGRATION=1 CAMPUSGO_D5_MQ=1 go test -race -count=1 -p 1 -v ./internal/errand ./internal/transport/httpapi
+CAMPUSGO_D5_INTEGRATION=1 CAMPUSGO_D5_MQ=1 go test -race -count=1 -p 1 -v ./internal/adapter/mysql ./internal/transport/httpapi
 python3 verification/d5-cleanup.py
 ./bin/reconcile -database campusgo_verification

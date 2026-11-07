@@ -1,6 +1,8 @@
-package errand
+package mysql
 
 import (
+	"github.com/yumestk/CampusGo/internal/contracts"
+
 	"context"
 	"database/sql"
 	"errors"
@@ -31,10 +33,7 @@ func runnerEligible(ctx context.Context, tx *sql.Tx, id int64) (string, error) {
 	}
 	return taskdomain.Eligible(score, ongoing), nil
 }
-func (g *Grabber) Confirm(ctx context.Context, u auth.User, id int64, round int) (Card, error) {
-	if id <= 0 || round < 0 || round > 2147483647 {
-		return Card{}, fault.New("INVALID_REQUEST", 400)
-	}
+func (g *TaskStore) ApplyConfirm(ctx context.Context, u auth.User, id int64, round int) (Card, error) {
 	tx, err := g.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return Card{}, fault.Dependency(err)
@@ -115,7 +114,7 @@ func enqueueTimeout(ctx context.Context, tx *sql.Tx, id int64) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO local_message (campus_id,errand_id,msg_key,topic,payload,deliver_at) SELECT campus_id,id,CONCAT('confirm-timeout:',id,':',round),'errand-confirm-timeout',JSON_OBJECT('errandId',CAST(id AS CHAR),'campusId',CAST(campus_id AS CHAR),'round',round,'version',CAST(version AS CHAR),'deadline',DATE_FORMAT(confirm_deadline,'%Y-%m-%dT%H:%i:%s.%fZ')),confirm_deadline FROM errand WHERE id=?`, id)
 	return err
 }
-func (g *Grabber) timeoutSnapshot(ctx context.Context, id int64) (Card, bool, error) {
+func (g *TaskStore) timeoutSnapshot(ctx context.Context, id int64) (Card, bool, error) {
 	c, err := scan(g.DB.QueryRowContext(ctx, "SELECT "+columns+" FROM errand WHERE id=?", id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, false, nil
@@ -127,60 +126,8 @@ func (g *Grabber) timeoutSnapshot(ctx context.Context, id int64) (Card, bool, er
 	err = g.DB.QueryRowContext(ctx, "SELECT status='LOCKED' AND confirm_deadline<=CURRENT_TIMESTAMP(3) FROM errand WHERE id=?", id).Scan(&due)
 	return c, due, err
 }
-func (g *Grabber) HandleTimeout(ctx context.Context, id int64, round int) (string, error) {
-	return g.handleTimeout(ctx, id, round, nil)
-}
-func (g *Grabber) handleTimeout(ctx context.Context, id int64, round int, hook func(string)) (string, error) {
-	c, due, err := g.timeoutSnapshot(ctx, id)
-	if err != nil {
-		return "", err
-	}
-	if !due || c.Status != "LOCKED" || c.Round != round {
-		return "SKIPPED", nil
-	}
-	var cycle int
-	err = g.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(round),0) FROM errand_status_log WHERE errand_id=? AND to_status='PUBLISHED'", id).Scan(&cycle)
-	if err != nil {
-		return "", err
-	}
-	if cycle > round {
-		return "SKIPPED", nil
-	}
-	if round-cycle >= 5 {
-		return g.timeoutStep(ctx, c, nil, hook)
-	}
-	for range 32 {
-		candidate, e := g.peekCandidate(ctx, id)
-		if e != nil || candidate == nil {
-			return g.timeoutStep(ctx, c, nil, hook)
-		} // Original policy: Redis outage returns to pool.
-		if candidate.Round > round {
-			return "SKIPPED", nil
-		}
-		if candidate.Round < cycle || candidate.RunnerID == c.PublisherID || (c.GrabberID != nil && candidate.RunnerID == *c.GrabberID) {
-			if e = g.removeCandidate(ctx, id, *candidate); e != nil {
-				return "", e
-			}
-			continue
-		}
-		outcome, e := g.timeoutStep(ctx, c, candidate, hook)
-		if e != nil {
-			return "", e
-		}
-		if outcome == "INELIGIBLE" {
-			if e = g.removeCandidate(ctx, id, *candidate); e != nil {
-				return "", e
-			}
-			continue
-		}
-		if outcome == "TRANSFERRED" {
-			_ = g.removeCandidate(ctx, id, *candidate)
-		}
-		return outcome, nil
-	}
-	return "SKIPPED", nil // Batch budget is not proof of an empty queue. The SQL scan retries.
-}
-func (g *Grabber) timeoutStep(ctx context.Context, c Card, next *Candidate, hook func(string)) (string, error) {
+
+func (g *TaskStore) timeoutStep(ctx context.Context, c Card, next *Candidate, hook func(string)) (string, error) {
 	tx, err := g.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return "", err
@@ -269,36 +216,47 @@ func (g *Grabber) timeoutStep(ctx context.Context, c Card, next *Candidate, hook
 	_ = g.invalidateDetail(ctx, c.ID)
 	return outcome, nil
 }
-func (g *Grabber) ScanDue(ctx context.Context, limit int) error {
+
+func (g *TaskStore) TimeoutSnapshot(ctx context.Context, id int64) (Card, bool, error) {
+	return g.timeoutSnapshot(ctx, id)
+}
+func (g *TaskStore) TimeoutCycle(ctx context.Context, id int64) (int, error) {
+	var cycle int
+	err := g.DB.QueryRowContext(ctx, "SELECT COALESCE(MAX(round),0) FROM errand_status_log WHERE errand_id=? AND to_status='PUBLISHED'", id).Scan(&cycle)
+	return cycle, err
+}
+func (g *TaskStore) TimeoutStep(ctx context.Context, c Card, next *Candidate) (string, error) {
+	return g.timeoutStep(ctx, c, next, g.timeoutHook)
+}
+func (g *TaskStore) PeekCandidate(ctx context.Context, id int64) (*Candidate, error) {
+	return g.peekCandidate(ctx, id)
+}
+func (g *TaskStore) RemoveCandidate(ctx context.Context, id int64, c Candidate) error {
+	return g.removeCandidate(ctx, id, c)
+}
+
+func (g *TaskStore) DueTimeouts(ctx context.Context, limit int) ([]contracts.DueTask, error) {
 	if limit < 1 || limit > 100 {
-		return fmt.Errorf("invalid scan limit")
+		return nil, fmt.Errorf("invalid scan limit")
 	}
 	rows, err := g.DB.QueryContext(ctx, "SELECT id,round FROM errand WHERE status='LOCKED' AND confirm_deadline<=CURRENT_TIMESTAMP(3) ORDER BY confirm_deadline,id LIMIT ?", limit)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	type task struct {
-		id    int64
-		round int
-	}
-	tasks := []task{}
+
+	tasks := []contracts.DueTask{}
 	for rows.Next() {
-		var t task
-		if err = rows.Scan(&t.id, &t.round); err != nil {
+		var t contracts.DueTask
+		if err = rows.Scan(&t.ID, &t.Round); err != nil {
 			rows.Close()
-			return err
+			return nil, err
 		}
 		tasks = append(tasks, t)
 	}
 	err = rows.Err()
 	rows.Close()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, t := range tasks {
-		if _, err = g.HandleTimeout(ctx, t.id, t.round); err != nil {
-			return err
-		}
-	}
-	return nil
+	return tasks, nil
 }

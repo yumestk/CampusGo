@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
 	"github.com/yumestk/CampusGo/internal/platform/rediscache"
@@ -44,7 +44,7 @@ func TestIntegrationD8Business(t *testing.T) {
 	t.Cleanup(func() { r.Close() })
 	ids, _ := idgen.New(1022)
 	namespace := "d8-" + uuid.NewString()
-	g := &errand.Grabber{DB: db, Redis: r, IDs: ids, Namespace: namespace}
+	g := &errand.TaskStore{DB: db, Redis: r, IDs: ids, Namespace: namespace}
 	exec := func(t *testing.T, q string, args ...any) {
 		t.Helper()
 		if _, e := db.ExecContext(ctx, q, args...); e != nil {
@@ -124,7 +124,7 @@ func TestIntegrationD8Business(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			s := &auth.Service{DB: db, Redis: r, Config: auth.Config{Environment: "test", Namespace: namespace + mode, Demo: true, Mode: mode, SessionTTL: time.Hour, JWTSecret: "d8-business-signing-secret-at-least-32-bytes", RefreshTTL: time.Hour}}
 			router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
-			RegisterBusiness(router, s, errand.Query{DB: db}, &errand.Publisher{DB: db, IDs: ids}, g)
+			registerTestBusiness(router, s, errand.Query{DB: db}, &errand.PublishStore{DB: db, IDs: ids}, g)
 			tokens := map[int64]string{}
 			for _, id := range []int64{1001, 2001, 2002, 9001} {
 				session, e := s.DemoLogin(ctx, id)

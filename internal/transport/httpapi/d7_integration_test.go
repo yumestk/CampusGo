@@ -13,8 +13,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/notify"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/rediscache"
@@ -38,7 +38,7 @@ func TestIntegrationD7Notifications(t *testing.T) {
 	defer r.Close()
 	s := &auth.Service{DB: db, Redis: r, Config: auth.Config{Environment: "test", Namespace: uuid.NewString(), Demo: true, SessionTTL: time.Hour, RequireGateway: true, GatewaySecret: strings.Repeat("g", 40)}}
 	router := NewRouter(slog.New(slog.NewTextHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
-	RegisterBusiness(router, s, errand.Query{DB: db}, &errand.Publisher{DB: db})
+	registerTestBusiness(router, s, errand.Query{DB: db}, &errand.PublishStore{DB: db})
 	a, e := s.DemoLogin(ctx, 1001)
 	if e != nil {
 		t.Fatal(e)

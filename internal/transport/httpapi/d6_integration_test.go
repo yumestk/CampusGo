@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/google/uuid"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/rediscache"
 	"github.com/yumestk/CampusGo/internal/platform/telemetry"
@@ -34,7 +34,7 @@ func TestIntegrationD6HTTP(t *testing.T) {
 	defer r.Close()
 	s := &auth.Service{DB: db, Redis: r, Config: auth.Config{Environment: "test", Namespace: uuid.NewString(), Demo: true, Mode: "jwt", JWTSecret: strings.Repeat("j", 40), SessionTTL: time.Hour, RefreshTTL: 24 * time.Hour, RequireGateway: true, GatewaySecret: strings.Repeat("g", 40)}}
 	router := NewRouter(slog.New(slog.NewJSONHandler(io.Discard, nil)), telemetry.NewRegistry("api"))
-	RegisterBusiness(router, s, errand.Query{DB: db}, &errand.Publisher{DB: db})
+	registerTestBusiness(router, s, errand.Query{DB: db}, &errand.PublishStore{DB: db})
 	request := func(method, path, body, token, key, gateway string) *httptest.ResponseRecorder {
 		t.Helper()
 		q := httptest.NewRequest(method, path, strings.NewReader(body))

@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/yumestk/CampusGo/internal/errand"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 )
 
@@ -33,7 +33,7 @@ func run() error {
 		return err
 	}
 	defer db.Close()
-	g := &errand.Grabber{DB: db}
+	g := &errand.TaskStore{DB: db}
 	if *replay != 0 {
 		ok, err := g.ReplayRepair(ctx, *replay, *reason)
 		if err != nil {

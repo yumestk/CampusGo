@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"bufio"
@@ -42,10 +42,10 @@ func TestIntegrationGrab(t *testing.T) {
 	t.Cleanup(func() { cache.Close() })
 	ids, _ := idgen.New(1019)
 	namespace := "d3-" + uuid.NewString()
-	g := &Grabber{DB: db, Redis: cache, IDs: ids, Namespace: namespace}
+	g := &TaskStore{DB: db, Redis: cache, IDs: ids, Namespace: namespace}
 	manifest := func(kind string, id int64) {
 		t.Helper()
-		f, e := os.OpenFile(filepath.Join("..", "..", "work", "d3-fixtures.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+		f, e := os.OpenFile(filepath.Join("..", "..", "..", "work", "d3-fixtures.jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -175,7 +175,7 @@ func TestIntegrationGrab(t *testing.T) {
 			go func() {
 				defer wg.Done()
 				<-start
-				r, e := g.Grab(ctx, u, uuid.NewString(), GrabCommand{id, 0})
+				r, e := g.Grab(ctx, u, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 0})
 				results <- r
 				failures <- e
 			}()
@@ -214,7 +214,11 @@ func TestIntegrationGrab(t *testing.T) {
 		errs := make(chan error, 24)
 		for range 24 {
 			wg.Add(1)
-			go func() { defer wg.Done(); _, e := g.Grab(ctx, runner, key, GrabCommand{id, 0}); errs <- e }()
+			go func() {
+				defer wg.Done()
+				_, e := g.Grab(ctx, runner, key, GrabCommand{ErrandID: id, ExpectedRound: 0})
+				errs <- e
+			}()
 		}
 		wg.Wait()
 		close(errs)
@@ -227,7 +231,7 @@ func TestIntegrationGrab(t *testing.T) {
 		if r.State != "SUCCEEDED" || count("SELECT COUNT(*) FROM grab_record WHERE errand_id=?", id) != 1 {
 			t.Fatalf("result=%+v", r)
 		}
-		for _, c := range []GrabCommand{{id, 1}, {newTask(), 0}} {
+		for _, c := range []GrabCommand{{ErrandID: id, ExpectedRound: 1}, {ErrandID: newTask(), ExpectedRound: 0}} {
 			_, e := g.Grab(ctx, runner, key, c)
 			requireCode(t, e, "IDEMPOTENCY_CONFLICT")
 		}
@@ -245,16 +249,16 @@ func TestIntegrationGrab(t *testing.T) {
 		}{{publisher, 0, "ERRAND_NOT_GRABBABLE"}, {runner, 1, "STALE_VERSION"}}
 		for _, tc := range cases {
 			id := newTask()
-			r, e := g.Grab(ctx, tc.user, uuid.NewString(), GrabCommand{id, tc.round})
+			r, e := g.Grab(ctx, tc.user, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: tc.round})
 			if e != nil || r.State != "REJECTED" || r.ErrorCode != tc.code {
 				t.Fatalf("%+v %v want %s", r, e, tc.code)
 			}
 		}
 		id := newTask()
-		_, e := g.Grab(ctx, newUser(2), uuid.NewString(), GrabCommand{id, 0})
+		_, e := g.Grab(ctx, newUser(2), uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 0})
 		requireCode(t, e, "ERRAND_NOT_FOUND")
 		execSQL("INSERT INTO credit_score (user_id,score) VALUES (?,39)", runner.ID)
-		r, e := g.Grab(ctx, runner, uuid.NewString(), GrabCommand{newTask(), 0})
+		r, e := g.Grab(ctx, runner, uuid.NewString(), GrabCommand{ErrandID: newTask(), ExpectedRound: 0})
 		if e != nil || r.ErrorCode != "CREDIT_TOO_LOW" {
 			t.Fatal(r, e)
 		}
@@ -265,14 +269,14 @@ func TestIntegrationGrab(t *testing.T) {
 			ongoing = append(ongoing, id)
 			execSQL("UPDATE errand SET grabber_id=?,status='ACCEPTED',slot_taken=1 WHERE id=?", runner.ID, id)
 		}
-		r, e = g.Grab(ctx, runner, uuid.NewString(), GrabCommand{newTask(), 0})
+		r, e = g.Grab(ctx, runner, uuid.NewString(), GrabCommand{ErrandID: newTask(), ExpectedRound: 0})
 		if e != nil || r.ErrorCode != "TOO_MANY_ONGOING" {
 			t.Fatal(r, e)
 		}
 		for _, id := range ongoing {
 			execSQL("UPDATE errand SET status='LOCKED' WHERE id=?", id)
 		}
-		r, e = g.Grab(ctx, runner, uuid.NewString(), GrabCommand{newTask(), 0})
+		r, e = g.Grab(ctx, runner, uuid.NewString(), GrabCommand{ErrandID: newTask(), ExpectedRound: 0})
 		if e != nil || r.State != "SUCCEEDED" {
 			t.Fatal("LOCKED incorrectly counted", r, e)
 		}
@@ -280,7 +284,7 @@ func TestIntegrationGrab(t *testing.T) {
 	t.Run("database_clock_and_token_fence_own_request_expiry", func(t *testing.T) {
 		id := newTask()
 		key := uuid.NewString()
-		r, _, e := g.registerGrab(ctx, runner, key, GrabCommand{id, 0}, make([]byte, 32))
+		r, _, e := g.registerGrab(ctx, runner, key, GrabCommand{ErrandID: id, ExpectedRound: 0}, make([]byte, 32))
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -303,7 +307,7 @@ func TestIntegrationGrab(t *testing.T) {
 		arb := newUser(1)
 		execSQL("UPDATE app_user SET role='ARBITRATOR' WHERE id=?", arb.ID)
 		arb.Role = "ARBITRATOR"
-		result, e = g.Grab(ctx, arb, uuid.NewString(), GrabCommand{newTask(), 0})
+		result, e = g.Grab(ctx, arb, uuid.NewString(), GrabCommand{ErrandID: newTask(), ExpectedRound: 0})
 		if e != nil || result.State != "SUCCEEDED" {
 			t.Fatal("added restriction absent in original system", result, e)
 		}
@@ -312,7 +316,7 @@ func TestIntegrationGrab(t *testing.T) {
 		id := newTask()
 		key := uuid.NewString()
 		execSQL(fmt.Sprintf("ALTER TABLE local_message ADD CONSTRAINT ck_d3_fail CHECK(errand_id<>%d)", id))
-		_, e := g.Grab(ctx, runner, key, GrabCommand{id, 0})
+		_, e := g.Grab(ctx, runner, key, GrabCommand{ErrandID: id, ExpectedRound: 0})
 		execSQL("ALTER TABLE local_message DROP CHECK ck_d3_fail")
 		requireCode(t, e, "INTERNAL_ERROR")
 		if taskStatus(id) != "PUBLISHED" || count("SELECT COUNT(*) FROM grab_record WHERE errand_id=?", id) != 0 || count("SELECT COUNT(*) FROM errand_status_log WHERE errand_id=?", id) != 0 || read(key, id).State != "PROCESSING" {
@@ -327,7 +331,7 @@ func TestIntegrationGrab(t *testing.T) {
 	t.Run("lease_expires_between_writes_and_COMMIT", func(t *testing.T) {
 		id := newTask()
 		key := uuid.NewString()
-		_, e := g.grab(ctx, runner, key, GrabCommand{id, 0}, func(phase string) {
+		_, e := g.grab(ctx, runner, key, GrabCommand{ErrandID: id, ExpectedRound: 0}, func(phase string) {
 			if phase == "reserved" {
 				execSQL("UPDATE grab_request SET lease_until=TIMESTAMPADD(MICROSECOND,100000,CURRENT_TIMESTAMP(3)) WHERE errand_id=?", id)
 			}
@@ -348,7 +352,7 @@ func TestIntegrationGrab(t *testing.T) {
 		proxyDB := databaseViaProxy(t, addr)
 		proxied := *g
 		proxied.DB = proxyDB
-		_, e := proxied.Grab(ctx, runner, key, GrabCommand{id, 0})
+		_, e := proxied.Grab(ctx, runner, key, GrabCommand{ErrandID: id, ExpectedRound: 0})
 		requireCode(t, e, "GRAB_RESULT_UNKNOWN")
 		select {
 		case <-dropped:
@@ -366,7 +370,7 @@ func TestIntegrationGrab(t *testing.T) {
 		if count("SELECT COUNT(*) FROM grab_record WHERE errand_id=?", id) != 1 {
 			t.Fatal("duplicate SQL effect")
 		}
-		if _, e = g.Grab(ctx, runner, key, GrabCommand{id, 0}); e != nil {
+		if _, e = g.Grab(ctx, runner, key, GrabCommand{ErrandID: id, ExpectedRound: 0}); e != nil {
 			t.Fatal(e)
 		}
 		hash, e := cache.HGetAll(ctx, g.stateKey(id)).Result()
@@ -386,7 +390,7 @@ func TestIntegrationGrab(t *testing.T) {
 		defer broken.Redis.Close()
 		id := newTask()
 		key := uuid.NewString()
-		_, e = broken.Grab(ctx, runner, key, GrabCommand{id, 0})
+		_, e = broken.Grab(ctx, runner, key, GrabCommand{ErrandID: id, ExpectedRound: 0})
 		requireCode(t, e, "DEPENDENCY_UNAVAILABLE")
 		if taskStatus(id) != "PUBLISHED" || read(key, id).State != "PROCESSING" {
 			t.Fatal("dependency failure fabricated final result")
@@ -400,11 +404,11 @@ func TestIntegrationGrab(t *testing.T) {
 	t.Run("old_revoke_cannot_clear_new_pending_and_tombstone_blocks_resurrection", func(t *testing.T) {
 		id := newTask()
 		hash := make([]byte, 32)
-		old, _, e := g.registerGrab(ctx, runner, uuid.NewString(), GrabCommand{id, 0}, hash)
+		old, _, e := g.registerGrab(ctx, runner, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 0}, hash)
 		if e != nil {
 			t.Fatal(e)
 		}
-		other, _, e := g.registerGrab(ctx, newUser(1), uuid.NewString(), GrabCommand{id, 0}, hash)
+		other, _, e := g.registerGrab(ctx, newUser(1), uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 0}, hash)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -448,7 +452,7 @@ func TestIntegrationGrab(t *testing.T) {
 		if e != nil || code != 2 {
 			t.Fatal("version rounded", code, e)
 		}
-		r, e := g.Grab(ctx, runner, uuid.NewString(), GrabCommand{id, 0})
+		r, e := g.Grab(ctx, runner, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 0})
 		if e != nil || r.State != "SUCCEEDED" {
 			t.Fatal(r, e)
 		}
@@ -639,7 +643,7 @@ func TestIntegrationGrab(t *testing.T) {
 		_, e = q.Detail(ctx, runner, id)
 		requireCode(t, e, "FORBIDDEN")
 		execSQL("UPDATE errand SET status='PUBLISHED',version=version+1 WHERE id=?", id)
-		r, e := g.Grab(ctx, runner, uuid.NewString(), GrabCommand{id, 0})
+		r, e := g.Grab(ctx, runner, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 0})
 		if e != nil || r.State != "SUCCEEDED" {
 			t.Fatal(r, e)
 		}
@@ -695,7 +699,7 @@ func TestIntegrationGrab(t *testing.T) {
 		release := make(chan struct{})
 		done := make(chan error, 1)
 		go func() {
-			_, e := g.grab(ctx, runner, key, GrabCommand{id, 0}, func(phase string) {
+			_, e := g.grab(ctx, runner, key, GrabCommand{ErrandID: id, ExpectedRound: 0}, func(phase string) {
 				if phase == "before_commit" {
 					close(entered)
 					<-release
@@ -709,7 +713,7 @@ func TestIntegrationGrab(t *testing.T) {
 			close(release)
 			t.Fatal("inflight result fabricated terminal", r, e)
 		}
-		r, e = g.Grab(ctx, runner, key, GrabCommand{id, 0})
+		r, e = g.Grab(ctx, runner, key, GrabCommand{ErrandID: id, ExpectedRound: 0})
 		if e != nil || r.State != "PROCESSING" {
 			close(release)
 			t.Fatal("inflight replay executed again", r, e)
@@ -837,7 +841,7 @@ func TestGrabCrashProcess(t *testing.T) {
 	}
 	defer cache.Close()
 	ids, _ := idgen.New(1018)
-	g := &Grabber{DB: db, Redis: cache, IDs: ids, Namespace: os.Getenv("CAMPUSGO_D3_NAMESPACE")}
+	g := &TaskStore{DB: db, Redis: cache, IDs: ids, Namespace: os.Getenv("CAMPUSGO_D3_NAMESPACE")}
 	id, _ := strconv.ParseInt(os.Getenv("CAMPUSGO_D3_TASK"), 10, 64)
 	runner, _ := strconv.ParseInt(os.Getenv("CAMPUSGO_D3_RUNNER"), 10, 64)
 	if phase == "worker_claimed" {
@@ -853,7 +857,7 @@ func TestGrabCrashProcess(t *testing.T) {
 		}
 		t.Fatal("worker task not found")
 	}
-	_, e = g.grab(ctx, auth.User{ID: runner, CampusID: 1, Role: "STUDENT"}, os.Getenv("CAMPUSGO_D3_KEY"), GrabCommand{id, 0}, func(at string) {
+	_, e = g.grab(ctx, auth.User{ID: runner, CampusID: 1, Role: "STUDENT"}, os.Getenv("CAMPUSGO_D3_KEY"), GrabCommand{ErrandID: id, ExpectedRound: 0}, func(at string) {
 		if at == phase {
 			fmt.Println("D3_CRASH_READY")
 			select {}

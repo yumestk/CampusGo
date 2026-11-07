@@ -2,12 +2,13 @@ package httpapi
 
 import (
 	"github.com/gin-gonic/gin"
+	errand "github.com/yumestk/CampusGo/internal/adapter/mysql"
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/errand"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 )
 
-func registerGrab(api *gin.RouterGroup, g *errand.Grabber) {
+func registerGrab(api *gin.RouterGroup, g *application.Grab, lifecycle *application.Lifecycle) {
 	api.POST("/errands/:id/confirm", func(c *gin.Context) {
 		id, err := positiveID(c.Param("id"))
 		if err != nil {
@@ -25,7 +26,7 @@ func registerGrab(api *gin.RouterGroup, g *errand.Grabber) {
 			fail(c, fault.New("INVALID_REQUEST", 400))
 			return
 		}
-		card, err := g.Confirm(c.Request.Context(), c.MustGet("user").(auth.User), id, *body.ExpectedRound)
+		card, err := lifecycle.Confirm(c.Request.Context(), c.MustGet("user").(auth.User), id, *body.ExpectedRound)
 		if err != nil {
 			fail(c, err)
 			return

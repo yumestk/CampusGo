@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"context"
@@ -43,7 +43,7 @@ func TestIntegrationPublishFunds(t *testing.T) {
 		t.Fatalf("D2 requires isolated verification DB without previous fund operations: count=%d err=%v", previous, err)
 	}
 	ids, _ := idgen.New(1021)
-	p := &Publisher{DB: db, IDs: ids}
+	p := &PublishStore{DB: db, IDs: ids}
 	q := wallet.Query{DB: db}
 	users := []int64{}
 	t.Cleanup(func() {
@@ -255,7 +255,7 @@ func TestIntegrationPublishFunds(t *testing.T) {
 		}
 		_, e = p.Publish(ctx, u, uuid.NewString(), command(math.MaxInt64))
 		requireCode(t, e, "INSUFFICIENT_BALANCE")
-		for _, c := range []PublishCommand{{1, "INVALID", "title", 1, 1}, {1, "DELIVERY", "", 1, 1}, {1, "DELIVERY", string([]byte{0xff}), 1, 1}, {1, "DELIVERY", "a\nb", 1, 1}, {1, "DELIVERY", "title", 1, 2}} {
+		for _, c := range []PublishCommand{{CampusID: 1, Type: "INVALID", Title: "title", RewardCents: 1, SlotTotal: 1}, {CampusID: 1, Type: "DELIVERY", Title: "", RewardCents: 1, SlotTotal: 1}, {CampusID: 1, Type: "DELIVERY", Title: string([]byte{0xff}), RewardCents: 1, SlotTotal: 1}, {CampusID: 1, Type: "DELIVERY", Title: "a\nb", RewardCents: 1, SlotTotal: 1}, {CampusID: 1, Type: "DELIVERY", Title: "title", RewardCents: 1, SlotTotal: 2}} {
 			_, e = p.Publish(ctx, u, uuid.NewString(), c)
 			requireCode(t, e, "INVALID_REQUEST")
 		}
@@ -449,7 +449,7 @@ func TestIntegrationPublishFunds(t *testing.T) {
 		key := uuid.NewString()
 		addr, dropped := commitAckProxy(t)
 		proxyDB := databaseViaProxy(t, addr)
-		proxied := &Publisher{DB: proxyDB, IDs: ids}
+		proxied := &PublishStore{DB: proxyDB, IDs: ids}
 		_, e := proxied.Publish(ctx, u, key, command(125))
 		requireCode(t, e, "PUBLISH_RESULT_UNKNOWN")
 		select {

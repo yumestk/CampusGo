@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"context"
@@ -225,7 +225,7 @@ func (q Query) cachedDetail(ctx context.Context, u auth.User, id int64) (Card, e
 	decorate(&body, u)
 	return body, nil
 }
-func (g *Grabber) invalidateDetail(ctx context.Context, id int64) error {
+func (g *TaskStore) invalidateDetail(ctx context.Context, id int64) error {
 	for shard := range 4 {
 		if err := g.Redis.Del(ctx, detailKey(g.Namespace, id, shard)).Err(); err != nil {
 			return err
@@ -233,7 +233,7 @@ func (g *Grabber) invalidateDetail(ctx context.Context, id int64) error {
 	}
 	return nil
 }
-func (g *Grabber) reconcileDetail(ctx context.Context, c Card) error {
+func (g *TaskStore) reconcileDetail(ctx context.Context, c Card) error {
 	cache := DetailCache{Redis: g.Redis, Namespace: g.Namespace}
 	cache.bloom(ctx, c.ID, true)
 	for shard := range 4 {

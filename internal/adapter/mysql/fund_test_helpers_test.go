@@ -1,4 +1,4 @@
-package errand
+package mysql
 
 import (
 	"context"
@@ -12,7 +12,7 @@ type testFunds struct {
 	store *FundStore
 }
 
-func newTestFunds(g *Grabber, send func(context.Context, FundEvent) (func(bool) error, error)) *testFunds {
+func newTestFunds(g *TaskStore, send func(context.Context, FundEvent) (func(bool) error, error)) *testFunds {
 	store := &FundStore{DB: g.DB, IDs: g.IDs}
 	return &testFunds{&application.Funds{Store: store, Send: send}, store}
 }
@@ -25,6 +25,6 @@ func (f *testFunds) execute(ctx context.Context, u auth.User, key string, c Fund
 	return app.Execute(ctx, u, key, c)
 }
 
-func (g *Grabber) ScanAutoSettle(ctx context.Context, f *testFunds) error {
+func (g *TaskStore) ScanAutoSettle(ctx context.Context, f *testFunds) error {
 	return f.ScanAutoSettle(ctx)
 }

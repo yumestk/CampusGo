@@ -1,6 +1,8 @@
-package errand
+package mysql
 
 import (
+	"github.com/yumestk/CampusGo/internal/contracts"
+
 	"context"
 	"database/sql"
 	"encoding/base64"
@@ -14,25 +16,6 @@ import (
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 )
 
-type Card struct {
-	ID               int64      `json:"id,string"`
-	CampusID         int64      `json:"campusId,string"`
-	PublisherID      int64      `json:"publisherId,string"`
-	GrabberID        *int64     `json:"grabberId,string"`
-	Type             string     `json:"type"`
-	Title            string     `json:"title"`
-	RewardCents      int64      `json:"rewardCents,string"`
-	SlotTotal        int        `json:"slotTotal"`
-	SlotTaken        int        `json:"slotTaken"`
-	Status           string     `json:"status"`
-	Round            int        `json:"round"`
-	Version          int64      `json:"version,string"`
-	Role             string     `json:"role"`
-	AvailableActions []string   `json:"availableActions"`
-	ConfirmDeadline  *time.Time `json:"confirmDeadline"`
-	DeliveredAt      *time.Time `json:"deliveredAt"`
-	CreatedAt        time.Time  `json:"-"`
-}
 type Page struct {
 	Items      []Card `json:"items"`
 	NextCursor string `json:"nextCursor"`
@@ -220,3 +203,5 @@ func taskModel(c Card) taskdomain.Task {
 	}
 	return taskdomain.Restore(taskdomain.Snapshot{ID: c.ID, CampusID: c.CampusID, PublisherID: c.PublisherID, RunnerID: runner, Version: c.Version, Round: c.Round, Slots: c.SlotTotal, Status: c.Status})
 }
+
+type Card = contracts.Card
