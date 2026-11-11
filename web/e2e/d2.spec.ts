@@ -12,7 +12,7 @@ async function demo(page:Page,userId='1001'){
  }});
  await page.goto('/');await page.getByRole('button',{name:userId==='1001'?/发单同学/:/跑腿同学 A/}).click();
  await expect(page.getByRole('button',{name:'退出登录'})).toBeVisible();await page.goto('/#/publish');
- await expect(page.getByRole('heading',{name:'发布委托.'})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'发布委托'})).toBeVisible();
 }
 async function fill(page:Page,title:string,yuan='12.34'){
  await page.getByLabel('任务标题').fill(title);await page.getByLabel('悬赏金额（元）').fill(yuan);
@@ -70,7 +70,7 @@ test('a pending publication stays with its original identity',async({page})=>{
 test('strict money input and mobile layout',async({page})=>{
  await page.setViewportSize({width:390,height:844});await demo(page);let writes=0;page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/errands')writes++;});
  await fill(page,'D2页面验证:金额校验','1.001');await page.getByRole('button',{name:'托管赏金并发布'}).click();await expect(page.getByRole('alert')).toContainText('最多两位小数');expect(writes).toBe(0);
- expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);await page.goto('/#/wallet');await expect(page.getByRole('heading',{name:'我的钱包.'})).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);await page.goto('/#/wallet');await expect(page.getByRole('heading',{name:'我的钱包'})).toBeVisible();expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
  if(process.env.CAMPUSGO_VISUAL==='1'){await expect(page.getByTestId('wallet-available')).not.toHaveText('—');await page.screenshot({path:resolve('../work/d2-wallet-mobile.png'),fullPage:true});}
 });
 

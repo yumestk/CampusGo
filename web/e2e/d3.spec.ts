@@ -9,7 +9,7 @@ async function demo(page:Page,n:number){
 async function operation(page:Page,n:number,user='2001'){return page.evaluate(({n,user})=>JSON.parse(localStorage.getItem(`campusgo_grab:${user}:900719925474130${n}`)!),{n,user});}
 test('grab reaches LOCKED with timeline and runner history; publisher cannot grab own task',async({page})=>{
  await demo(page,1);await page.getByRole('button',{name:'立即抢单'}).click();await expect(page.getByRole('heading',{name:'已抢到，等待确认'})).toBeVisible();await expect(page.getByText('待抢单 → 待确认')).toBeVisible();
- await page.getByRole('link',{name:'查看我的任务'}).click();await page.getByRole('button',{name:'我接单的'}).click();await expect(page.getByRole('link',{name:'D3页面验证:正常抢单'})).toBeVisible();
+ await page.getByRole('link',{name:'查看我的任务'}).click();await page.getByRole('button',{name:'我接单的'}).click();await expect(page.getByRole('link',{name:'D3页面验证:正常抢单',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'退出登录'}).click();await page.getByRole('button',{name:/发单同学/}).click();await expect(page.getByRole('button',{name:'退出登录'})).toBeVisible();await page.goto(`/#/detail/${id(8)}`);await expect(page.getByRole('heading',{name:'D3页面验证:新轮次'})).toBeVisible();await expect(page.getByRole('button',{name:'立即抢单'})).toHaveCount(0);
 });
 test('committed response lost; reload queries original key without another write',async({page})=>{

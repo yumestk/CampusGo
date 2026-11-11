@@ -1,6 +1,7 @@
 import {test,expect} from '@playwright/test';
 import type {Page} from '@playwright/test';
 import {appendFileSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
 
 test.skip(process.env.CAMPUSGO_D8_BROWSER!=='1','run make verify-d8-business');
@@ -36,7 +37,7 @@ test('D8 business all-UI publish, grab, confirm, deliver, settle, credit and dur
  await expect(page.locator('.status-ACCEPTED')).toBeVisible();await action(page,'确认取货');await expect(page.locator('.status-PICKED_UP')).toBeVisible();
  await action(page,'确认送达');await expect(page.locator('.status-DELIVERED')).toBeVisible();
  await login(page,'1001');await page.goto(detail);await action(page,'确认完成并结算');await expect(page.locator('.status-SETTLED')).toBeVisible();
- await login(page,'2001');await page.goto('/#/credit');await expect(page.getByRole('heading',{name:'靠谱，值得被看见'})).toBeVisible();
+ await login(page,'2001');await page.goto(detail);await expect(page.getByRole('heading',{name:'本次抢单曾成功'})).toBeVisible();await expect(page.getByRole('button',{name:'确认接单',exact:true})).toHaveCount(0);await page.goto('/#/credit');await expect(page.getByRole('heading',{name:'信用中心'})).toBeVisible();
  const event=page.getByRole('region',{name:'信用足迹'}).locator('.account-credit-event').filter({has:page.locator(`a[href="#/detail/${id}"]`)});
  await expect(event.getByText('完成结算',{exact:true})).toBeVisible();await expect(event.getByText('+2',{exact:true})).toBeVisible();
  await page.getByRole('button',{name:'扣分记录',exact:true}).click();await expect(event).toHaveCount(0);
@@ -50,11 +51,48 @@ test('D8 business all-UI publish, grab, confirm, deliver, settle, credit and dur
 });
 
 test('D8 business credit navigation, filters and mobile layout',async({page})=>{
- await page.setViewportSize({width:390,height:844});await login(page,'2001');
+ await page.setViewportSize({width:375,height:844});await login(page,'2001');
  await page.getByRole('navigation',{name:'底部导航'}).getByRole('link',{name:'信用',exact:true}).click();
- await expect(page.getByRole('heading',{name:'靠谱，值得被看见'})).toBeVisible();
+ await expect(page.getByRole('heading',{name:'信用中心'})).toBeVisible();
  await expect(page.getByTestId('credit-score')).not.toContainText('—');
  await page.getByRole('button',{name:'刷新信用',exact:true}).click();await expect(page.getByRole('button',{name:'刷新信用',exact:true})).toBeEnabled();
  await expect(page.getByRole('region',{name:'校园信用榜'})).toBeVisible();
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+});
+
+test('D8 business bulletin filters preserve mine context and mobile navigation fits 375px',async({page})=>{
+ page.on('request',r=>{if(r.method()==='POST'&&new URL(r.url()).pathname==='/api/errands'){
+  const key=r.headers()['idempotency-key'];if(key)appendFileSync(resolve('../work/d5-browser-keys.jsonl'),JSON.stringify({userId:'1001',key})+'\n');
+ }});
+ await login(page,'1001');await page.goto('/#/publish');
+ const marker=`C公告栏${randomUUID().slice(0,8)}`;
+ const title=`D5页面验证:${marker}，帮取图书馆预约书籍并送到宿舍楼下，联系与交接事项请在接单后核对`;
+ await page.getByLabel('任务类型').selectOption('BUY');
+ await page.getByLabel('任务标题').fill(title);await page.getByLabel('悬赏金额（元）').fill('8.88');
+ await page.getByRole('button',{name:'托管赏金并发布'}).click();
+ await expect(page.getByRole('heading',{name:'发布成功，赏金已托管'})).toBeVisible();
+ await page.goto('/#/square');await page.getByRole('textbox',{name:'搜索任务'}).fill(marker);
+ await expect(page.getByRole('link',{name:`查看任务：${title}`,exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'跑腿配送',exact:true}).click();
+ await expect(page.getByRole('link',{name:`查看任务：${title}`,exact:true})).toHaveCount(0);
+ await expect(page.getByRole('heading',{name:'没有匹配的任务'})).toBeVisible();
+ await page.getByRole('button',{name:'帮我买',exact:true}).click();
+ await expect(page.getByRole('link',{name:`查看任务：${title}`,exact:true})).toBeVisible();
+ await page.goto('/#/mine');await page.getByRole('button',{name:'我发布的',exact:true}).click();
+ await page.getByRole('button',{name:'进行中',exact:true}).click();
+ await page.getByRole('textbox',{name:'搜索任务'}).fill(marker);
+ await page.getByRole('link',{name:`查看任务：${title}`,exact:true}).click();
+ await expect(page.getByRole('link',{name:'返回我的任务'})).toBeVisible();
+ await page.getByRole('link',{name:'返回我的任务'}).click();
+ await expect(page.getByRole('textbox',{name:'搜索任务'})).toHaveValue(marker);
+ await expect(page.getByRole('button',{name:'进行中',exact:true})).toHaveAttribute('aria-pressed','true');
+ await page.setViewportSize({width:375,height:844});
+ await expect(page.getByRole('link',{name:`查看任务：${title}`,exact:true})).toBeVisible();
+ await page.getByRole('link',{name:`查看任务：${title}`,exact:true}).click();
+ await expect(page.getByRole('heading',{name:title,exact:true})).toBeVisible();
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+ const nav=page.getByRole('navigation',{name:'底部导航'});
+ await expect(nav.getByRole('link')).toHaveCount(5);
+ const bounds=await nav.getByRole('link').evaluateAll(links=>links.map(e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};}));
+ expect(bounds.every(r=>r.left>=0&&r.right<=375&&r.width>=44&&r.height>=44&&r.top===bounds[0].top&&r.bottom<=844)).toBe(true);
 });
