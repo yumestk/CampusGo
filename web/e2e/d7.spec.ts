@@ -62,7 +62,14 @@ test('notification pagination, ownership and responsive page work',async({page})
  const id=await task(page,'D7通知分页');
  for(let i=0;i<23;i++)sql(`INSERT INTO notification(msg_key,user_id,errand_id,type,content) VALUES('${randomUUID()}',1001,${id},'CANCEL','D7分页通知 ${i}');`);
  await login(page);await page.goto('/#/notifications');await expect(page.locator('.notice-item')).toHaveCount(20);
- while(await page.getByRole('button',{name:'加载更早通知'}).isVisible()){await page.getByRole('button',{name:'加载更早通知'}).click();await expect(page.getByRole('button',{name:'刷新通知'})).toBeEnabled();}await expect(page.locator('.notice-item')).toHaveCount(Number(sql('SELECT COUNT(*) FROM notification WHERE user_id=1001;')));
+ const notices=page.locator('.notice-item'),expected=Number(sql('SELECT COUNT(*) FROM notification WHERE user_id=1001;'));
+ while(await notices.count()<expected){
+  const before=await notices.count(),more=page.locator('.notice-list > button');
+  await expect(more).toBeVisible();
+  await more.click();
+  await expect.poll(()=>notices.count()).toBeGreaterThan(before);
+ }
+ await expect(notices).toHaveCount(expected);
  await page.setViewportSize({width:390,height:844});expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
  await login(page,'2002');await page.goto('/#/notifications');await expect(page.getByText(/D7分页通知/)).toHaveCount(0);
 });
