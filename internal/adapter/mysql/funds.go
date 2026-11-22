@@ -263,6 +263,9 @@ func (f *FundStore) Apply(ctx context.Context, u auth.User, e FundEvent, hash []
 	if err = commit(tx); err != nil {
 		return r, &fault.Error{Code: "FUND_RESULT_UNKNOWN", Status: 503, Cause: err}
 	}
+	if f.Invalidate != nil {
+		f.Invalidate(ctx, e.ErrandID)
+	}
 	r.State = "COMMITTED"
 	r.Status = status
 	return r, nil
@@ -271,6 +274,7 @@ func (f *FundStore) Apply(ctx context.Context, u auth.User, e FundEvent, hash []
 type FundStore struct {
 	DB           *sql.DB
 	IDs          *idgen.Generator
+	Invalidate   func(context.Context, int64)
 	beforeCommit func(*sql.Tx) error
 	commit       func(*sql.Tx) error
 }

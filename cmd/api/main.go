@@ -88,7 +88,11 @@ func run(logger *slog.Logger) error {
 	go func() { defer close(hubDone); hub.Run(hubCtx) }()
 	defer func() { stopHub(); <-hubDone }()
 	mq := &fundmq.Client{Namespace: dbName}
-	funds := &application.Funds{Store: &mysqlstore.FundStore{DB: db, IDs: ids}, Send: mq.Send, Record: mysqlstore.NewFundRecorder(registry)}
+	fundStore := &mysqlstore.FundStore{
+		DB: db, IDs: ids,
+		Invalidate: func(c context.Context, id int64) { _ = details.Invalidate(c, id) },
+	}
+	funds := &application.Funds{Store: fundStore, Send: mq.Send, Record: mysqlstore.NewFundRecorder(registry)}
 	pushCtx, stopPush := context.WithCancel(ctx)
 	pushDone := make(chan struct{})
 	go func() {

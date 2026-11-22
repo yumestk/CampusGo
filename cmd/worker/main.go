@@ -70,7 +70,12 @@ func run(logger *slog.Logger) error {
 	g := &mysqlstore.TaskStore{DB: db, Redis: cache, IDs: ids, Namespace: name}
 	registry := telemetry.NewRegistry("worker")
 	mq := &fundmq.Client{Namespace: name}
-	funds := &application.Funds{Store: &mysqlstore.FundStore{DB: db, IDs: ids}, Send: mq.Send, Record: mysqlstore.NewFundRecorder(registry)}
+	details := &mysqlstore.DetailCache{Redis: cache, Namespace: name}
+	fundStore := &mysqlstore.FundStore{
+		DB: db, IDs: ids,
+		Invalidate: func(c context.Context, id int64) { _ = details.Invalidate(c, id) },
+	}
+	funds := &application.Funds{Store: fundStore, Send: mq.Send, Record: mysqlstore.NewFundRecorder(registry)}
 	timeouts := &application.Timeouts{Store: g, Candidates: g}
 	var workers sync.WaitGroup
 	onError := func(err error) { logger.Error("worker operation failed", "cause_type", fmt.Sprintf("%T", err)) }

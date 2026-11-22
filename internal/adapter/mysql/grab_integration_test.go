@@ -603,14 +603,42 @@ func TestIntegrationGrab(t *testing.T) {
 		go func() { defer close(refreshDone); details.RunRefresh(refreshCtx, db) }()
 		defer func() { stopRefresh(); <-refreshDone }()
 		q := Query{DB: db, Cache: details}
-		details.put(ctx, id, Card{}, true)
-		cache.Del(ctx, details.bloomKey())
+		shardKeys := func(id int64) []string {
+			keys := make([]string, 4)
+			for shard := range keys {
+				keys[shard] = detailKey(namespace, id, shard)
+			}
+			return keys
+		}
+		requireNoCache := func(id int64) {
+			t.Helper()
+			if n, e := cache.Exists(ctx, shardKeys(id)...).Result(); e != nil || n != 0 {
+				t.Fatalf("unexpected cached detail %d: shards=%d, err=%v", id, n, e)
+			}
+		}
+		missing := newID()
+		_, e := q.Detail(ctx, runner, missing)
+		requireCode(t, e, "ERRAND_NOT_FOUND")
+		values, e := cache.MGet(ctx, shardKeys(missing)...).Result()
+		if e != nil {
+			t.Fatal(e)
+		}
+		for _, value := range values {
+			raw, ok := value.(string)
+			var stored cachedDetail
+			if !ok || json.Unmarshal([]byte(raw), &stored) != nil || !stored.Empty || stored.Exp <= time.Now().UnixMilli() {
+				t.Fatal("first missing lookup did not populate a fresh negative shard", value)
+			}
+		}
+		_, e = q.Detail(ctx, runner, missing)
+		requireCode(t, e, "ERRAND_NOT_FOUND")
+
 		c, e := q.Detail(ctx, runner, id)
 		if e != nil || c.Status != "PUBLISHED" || len(c.AvailableActions) != 1 {
-			t.Fatal("negative hint vetoed SQL", c, e)
+			t.Fatal("first detail lookup did not load the published task", c, e)
 		}
-		if _, e = q.Detail(ctx, runner, id); e != nil {
-			t.Fatal(e)
+		if hit, e := q.Detail(ctx, runner, id); e != nil || hit.ID != id || hit.Version != c.Version {
+			t.Fatal("cached lookup returned the wrong task", hit, e)
 		}
 		metrics, e := registry.Gather()
 		if e != nil {
@@ -622,40 +650,66 @@ func TestIntegrationGrab(t *testing.T) {
 				counts[m.Label[0].GetValue()] = m.Counter.GetValue()
 			}
 		}
-		if counts["hit"] != 1 || counts["sql_authority_query"] != 2 || counts["sql_body_query"] != 1 {
-			t.Fatal("misleading cache metrics", counts)
+		if counts["hit"] != 1 || counts["negative_hit"] != 1 || counts["sql_body_query"] != 2 || counts["sql_authority_query"] != 0 {
+			t.Fatal("expected positive and negative hits without SQL", counts)
 		}
-		before, _ := cache.Get(ctx, detailKey(namespace, id, 0)).Result()
-		_, e = q.Detail(ctx, auth.User{ID: runner.ID, CampusID: 2, Role: "STUDENT"}, id)
+		outsider := auth.User{ID: runner.ID, CampusID: 2, Role: "STUDENT"}
+		cold := newTask()
+		_, e = q.Detail(ctx, outsider, cold)
 		requireCode(t, e, "ERRAND_NOT_FOUND")
-		after, _ := cache.Get(ctx, detailKey(namespace, id, 0)).Result()
-		if before != after {
-			t.Fatal("cross-campus miss poisoned shared cache")
+		requireNoCache(cold)
+		before, e := cache.MGet(ctx, shardKeys(id)...).Result()
+		if e != nil {
+			t.Fatal(e)
+		}
+		_, e = q.Detail(ctx, outsider, id)
+		requireCode(t, e, "ERRAND_NOT_FOUND")
+		after, e := cache.MGet(ctx, shardKeys(id)...).Result()
+		if e != nil {
+			t.Fatal(e)
+		}
+		for shard := range before {
+			if before[shard] == nil || before[shard] != after[shard] {
+				t.Fatal("cross-campus lookup changed the shared cache", shard)
+			}
 		}
 
-		for shard := range 4 {
-			raw, _ := cache.Get(ctx, detailKey(namespace, id, shard)).Bytes()
+		execSQL("UPDATE errand SET version=version+1 WHERE id=?", id)
+		for _, key := range shardKeys(id) {
+			raw, e := cache.Get(ctx, key).Bytes()
 			var stored cachedDetail
-			json.Unmarshal(raw, &stored)
+			if e != nil || json.Unmarshal(raw, &stored) != nil {
+				t.Fatal("could not read warm shard", key, e)
+			}
 			stored.Exp = 1
 			raw, _ = json.Marshal(stored)
-			cache.Set(ctx, detailKey(namespace, id, shard), raw, time.Minute)
+			if e = cache.Set(ctx, key, raw, time.Minute).Err(); e != nil {
+				t.Fatal(e)
+			}
 		}
 		lock := fmt.Sprintf("campusgo:%s:detail:rebuild:%d", namespace, id)
-		cache.Set(ctx, lock, "another-owner", time.Minute)
-		if _, e = q.Detail(ctx, runner, id); e != nil {
+		if e = cache.Set(ctx, lock, "another-owner", time.Minute).Err(); e != nil {
 			t.Fatal(e)
 		}
-		cache.Del(ctx, lock)
-		if _, e = q.Detail(ctx, runner, id); e != nil {
+		if stale, e := q.Detail(ctx, runner, id); e != nil || stale.Version != c.Version {
+			t.Fatal("non-owner did not serve the stale value", stale, e)
+		}
+		if e = cache.Del(ctx, lock).Err(); e != nil {
 			t.Fatal(e)
+		}
+		if stale, e := q.Detail(ctx, runner, id); e != nil || stale.Version != c.Version {
+			t.Fatal("refresh owner did not serve the stale value", stale, e)
 		}
 		deadline := time.Now().Add(2 * time.Second)
 		for {
-			raw, _ := cache.Get(ctx, detailKey(namespace, id, 0)).Bytes()
-			var fresh cachedDetail
-			json.Unmarshal(raw, &fresh)
-			if fresh.Exp > time.Now().UnixMilli() {
+			if n, e := cache.Exists(ctx, lock).Result(); e != nil {
+				t.Fatal(e)
+			} else if n == 0 {
+				raw, e := cache.Get(ctx, detailKey(namespace, id, 0)).Bytes()
+				var fresh cachedDetail
+				if e != nil || json.Unmarshal(raw, &fresh) != nil || fresh.Exp <= time.Now().UnixMilli() || fresh.Data.Version != c.Version+1 {
+					t.Fatal("background refresh did not publish the new version", fresh, e)
+				}
 				break
 			}
 			if time.Now().After(deadline) {
@@ -664,13 +718,25 @@ func TestIntegrationGrab(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 		execSQL("UPDATE errand SET status='DRAFT',version=version+1 WHERE id=?", id)
+		if e = g.reconcileDetail(ctx, Card{ID: id, Status: "DRAFT"}); e != nil {
+			t.Fatal(e)
+		}
+		requireNoCache(id)
 		_, e = q.Detail(ctx, runner, id)
 		requireCode(t, e, "FORBIDDEN")
+		if draft, e := q.Detail(ctx, publisher, id); e != nil || draft.Status != "DRAFT" {
+			t.Fatal("publisher cannot read their draft", draft, e)
+		}
+		requireNoCache(id)
 		execSQL("UPDATE errand SET status='PUBLISHED',version=version+1 WHERE id=?", id)
+		if c, e = q.Detail(ctx, runner, id); e != nil || c.Status != "PUBLISHED" {
+			t.Fatal("could not warm the published task before grab", c, e)
+		}
 		r, e := g.Grab(ctx, runner, uuid.NewString(), GrabCommand{ErrandID: id, ExpectedRound: 0})
 		if e != nil || r.State != "SUCCEEDED" {
 			t.Fatal(r, e)
 		}
+		requireNoCache(id)
 		c, e = q.Detail(ctx, runner, id)
 		if e != nil || c.Status != "LOCKED" || len(c.AvailableActions) != 1 || c.AvailableActions[0] != "CONFIRM" || c.ConfirmDeadline == nil {
 			t.Fatal("cache authorized stale grab", c, e)
