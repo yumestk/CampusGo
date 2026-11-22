@@ -33,10 +33,17 @@ type GrabLimits struct {
 	pruned, recoverySecond int64
 	recoveryCount          int
 	hot                    map[int64]*hotWindow
+	taskWriteCap           int
+	taskInFlight           map[int64]int
 }
 
 func NewGrabLimits(r *redis.Client, namespace string) *GrabLimits {
-	return &GrabLimits{redis: r, namespace: namespace, writes: make(chan struct{}, 10), queries: make(chan struct{}, 10), started: time.Now(), hot: map[int64]*hotWindow{}}
+	return &GrabLimits{
+		redis: r, namespace: namespace,
+		writes: make(chan struct{}, 10), queries: make(chan struct{}, 10),
+		started: time.Now(), hot: map[int64]*hotWindow{},
+		taskWriteCap: 2, taskInFlight: map[int64]int{},
+	}
 }
 
 func (l *GrabLimits) shared(ctx context.Context, user, task int64, query bool) error {
@@ -110,6 +117,28 @@ func (l *GrabLimits) hotAllowed(task int64, now int64) error {
 	w.head = (w.head + 1) % len(w.stamps)
 	return nil
 }
+
+func (l *GrabLimits) acquireTaskWrite(task int64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	count, exists := l.taskInFlight[task]
+	if count >= l.taskWriteCap || (!exists && len(l.taskInFlight) >= 4096) {
+		return false
+	}
+	l.taskInFlight[task]++
+	return true
+}
+
+func (l *GrabLimits) releaseTaskWrite(task int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.taskInFlight[task] <= 1 {
+		delete(l.taskInFlight, task)
+	} else {
+		l.taskInFlight[task]--
+	}
+}
+
 func (l *GrabLimits) admit(ctx context.Context, user, task int64, query bool) (func(), error) {
 	if l == nil {
 		return func() {}, nil
@@ -117,21 +146,33 @@ func (l *GrabLimits) admit(ctx context.Context, user, task int64, query bool) (f
 	if err := l.shared(ctx, user, task, query); err != nil {
 		return nil, err
 	}
+	return l.admitLocal(task, query, int64(time.Since(l.started)))
+}
+
+func (l *GrabLimits) admitLocal(task int64, query bool, now int64) (func(), error) {
 	slots := l.writes
 	if query {
 		slots = l.queries
+	} else {
+		if err := l.hotAllowed(task, now); err != nil {
+			return nil, err
+		}
+		if !l.acquireTaskWrite(task) {
+			return nil, fault.New("DEPENDENCY_UNAVAILABLE", 503)
+		}
 	}
 	select {
 	case slots <- struct{}{}:
 	default:
+		if !query {
+			l.releaseTaskWrite(task)
+		}
 		return nil, fault.New("DEPENDENCY_UNAVAILABLE", 503)
 	}
-	release := func() { <-slots }
-	if !query {
-		if err := l.hotAllowed(task, int64(time.Since(l.started))); err != nil {
-			release()
-			return nil, err
+	return sync.OnceFunc(func() {
+		<-slots
+		if !query {
+			l.releaseTaskWrite(task)
 		}
-	}
-	return release, nil
+	}), nil
 }
