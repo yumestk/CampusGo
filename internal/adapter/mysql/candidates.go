@@ -11,6 +11,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/yumestk/CampusGo/internal/contracts"
+	"github.com/yumestk/CampusGo/internal/platform/fault"
 )
 
 func (g *TaskStore) candidateKeys(id int64) []string {
@@ -19,10 +20,15 @@ func (g *TaskStore) candidateKeys(id int64) []string {
 
 var offerCandidate = redis.NewScript(`
 local current=redis.call('HGET',KEYS[2],ARGV[1])
-if current and tonumber(string.match(current,'^(%d+):'))>=tonumber(ARGV[3]) then return 0 end
-redis.call('ZADD',KEYS[1],ARGV[2],ARGV[1])
-redis.call('HSET',KEYS[2],ARGV[1],ARGV[3]..':'..ARGV[4])
-return 1`)
+local added=0
+if not current or tonumber(string.match(current,'^(%d+):'))<tonumber(ARGV[3]) then
+    redis.call('ZADD',KEYS[1],ARGV[2],ARGV[1])
+    redis.call('HSET',KEYS[2],ARGV[1],ARGV[3]..':'..ARGV[4])
+    added=1
+end
+redis.call('EXPIRE',KEYS[1],86400)
+redis.call('EXPIRE',KEYS[2],86400)
+return added`)
 var peekCandidate = redis.NewScript(`
 local head=redis.call('ZRANGE',KEYS[1],0,0)
 if #head==0 then return {} end
@@ -34,12 +40,16 @@ if redis.call('HGET',KEYS[2],ARGV[1])~=ARGV[2] then return 0 end
 redis.call('ZREM',KEYS[1],ARGV[1]);redis.call('HDEL',KEYS[2],ARGV[1]);return 1`)
 
 func (g *TaskStore) offerCandidate(ctx context.Context, r grabRequest) error {
+	var hasWallet bool
 	var score int
 	// A late rejection can only offer for its original live cycle/round. Eligibility
 	// is checked again under the user lock at promotion; this queue is a preference.
-	err := g.DB.QueryRowContext(ctx, `SELECT COALESCE((SELECT score FROM credit_score WHERE user_id=?),60) FROM errand e JOIN app_user u ON u.id=? WHERE e.id=? AND e.campus_id=? AND u.campus_id=e.campus_id AND u.active=1 AND u.role IN ('STUDENT','ARBITRATOR') AND e.status='LOCKED' AND e.round=? AND e.publisher_id<>u.id AND e.grabber_id<>u.id AND (SELECT COUNT(*) FROM errand WHERE grabber_id=u.id AND status IN ('ACCEPTED','PICKED_UP'))<5`, r.RunnerID, r.RunnerID, r.ErrandID, r.CampusID, r.Round).Scan(&score)
+	err := g.DB.QueryRowContext(ctx, `SELECT `+runnerWalletExists+`,COALESCE((SELECT score FROM credit_score WHERE user_id=?),60) FROM errand e JOIN app_user u ON u.id=? WHERE e.id=? AND e.campus_id=? AND u.campus_id=e.campus_id AND u.active=1 AND u.role IN ('STUDENT','ARBITRATOR') AND e.status='LOCKED' AND e.round=? AND e.publisher_id<>u.id AND e.grabber_id<>u.id AND (SELECT COUNT(*) FROM errand WHERE grabber_id=u.id AND status IN ('ACCEPTED','PICKED_UP'))<5`, r.RunnerID, r.RunnerID, r.RunnerID, r.ErrandID, r.CampusID, r.Round).Scan(&hasWallet, &score)
 	if err != nil {
 		return err
+	}
+	if !hasWallet {
+		return fault.New("ACCOUNT_NOT_FOUND", 409)
 	}
 	if score < 40 {
 		return nil

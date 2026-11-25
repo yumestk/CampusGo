@@ -144,18 +144,34 @@ func (g *TaskStore) ReconcileBatch(ctx context.Context, after int64, limit int) 
 	next := int64(0)
 	for _, c := range cards {
 		next = c.ID
-		hash, e := g.Redis.HGetAll(ctx, g.stateKey(c.ID)).Result()
-		if e != nil {
+		active := activeProjection(c.Status)
+		key := g.stateKey(c.ID)
+		pipe := g.Redis.Pipeline()
+		projected := pipe.HGetAll(ctx, key)
+		ttl := pipe.PTTL(ctx, key)
+		candidates := g.candidateKeys(c.ID)
+		if active {
+			for _, candidateKey := range candidates {
+				pipe.ExpireNX(ctx, candidateKey, activeProjectionTTL)
+			}
+		} else {
+			pipe.Del(ctx, candidates...)
+		}
+		if _, e := pipe.Exec(ctx); e != nil {
 			return after, e
 		}
+		hash := projected.Val()
 		expected := projectionArgs(c)
 		fields := []string{"dbVersion", "round", "status", "slotTaken", "ownerRunnerId"}
 		drift := hash["mode"] != "READY"
 		for i, f := range fields {
 			drift = drift || hash[f] != fmt.Sprint(expected[i])
 		}
+		if len(hash) != 0 && (ttl.Val() < 0 || (!active && (ttl.Val() > inactiveProjectionTTL || hash["reservationToken"] != ""))) {
+			drift = true
+		}
 		// A terminal request can leave a same-version pending after a crash before acquire returns.
-		if token := hash["reservationToken"]; token != "" {
+		if token := hash["reservationToken"]; active && token != "" {
 			request, e := scanGrab(g.DB.QueryRowContext(ctx, "SELECT "+grabRequestColumns+" FROM grab_request WHERE id=? AND errand_id=?", hash["requestDbId"], c.ID))
 			if e != nil && !errors.Is(e, sql.ErrNoRows) {
 				return after, e
@@ -176,7 +192,7 @@ func (g *TaskStore) ReconcileBatch(ctx context.Context, after int64, limit int) 
 				}
 			}
 		}
-		if drift {
+		if drift && (active || len(hash) != 0) {
 			tx, e := g.DB.BeginTx(ctx, nil)
 			if e != nil {
 				return after, e

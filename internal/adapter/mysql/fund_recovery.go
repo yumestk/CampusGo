@@ -245,30 +245,6 @@ func (f *FundStore) FinishRecovery(ctx context.Context, t FundRecovery, e error)
 	return err
 }
 
-func (f *FundStore) DueSettlements(ctx context.Context) ([]contracts.DueSettlement, error) {
-	rows, err := f.DB.QueryContext(ctx, "SELECT id,campus_id,round FROM errand WHERE status='DELIVERED' AND delivered_at<=TIMESTAMPADD(SECOND,-86400,CURRENT_TIMESTAMP(3)) ORDER BY delivered_at,id LIMIT 50")
-	if err != nil {
-		return nil, err
-	}
-
-	tasks := []contracts.DueSettlement{}
-	for rows.Next() {
-		var t contracts.DueSettlement
-		if err = rows.Scan(&t.ID, &t.CampusID, &t.Round); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		tasks = append(tasks, t)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-
-	return tasks, nil
-}
-
 func (f *FundStore) ValidAutoSettle(ctx context.Context, id, campus int64, round int, version int64, deadline time.Time) (bool, error) {
 	var valid bool
 	err := f.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM errand WHERE id=? AND campus_id=? AND round=? AND version=? AND status='DELIVERED' AND TIMESTAMPADD(SECOND,86400,delivered_at)=? AND delivered_at<=TIMESTAMPADD(SECOND,-86400,CURRENT_TIMESTAMP(3)))", id, campus, round, version, deadline.UTC()).Scan(&valid)

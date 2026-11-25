@@ -77,6 +77,7 @@ func TestIntegrationGrab(t *testing.T) {
 		id := newID()
 		manifest("user", id)
 		execSQL("INSERT INTO app_user (id,campus_id,display_name) VALUES (?,?,'D3验证用户')", id, campus)
+		execSQL("INSERT INTO wallet_account(id,owner_id,owner_type,available,frozen,version) VALUES (?,?,'USER',0,0,0)", id, id)
 		owned = append(owned, id)
 		return auth.User{ID: id, CampusID: campus, Role: "STUDENT"}
 	}
@@ -101,6 +102,9 @@ func TestIntegrationGrab(t *testing.T) {
 		}
 		for _, id := range owned {
 			db.Exec("DELETE FROM credit_score WHERE user_id=?", id)
+			if _, e := db.Exec("DELETE FROM wallet_account WHERE owner_id=? AND owner_type='USER'", id); e != nil {
+				t.Error(e)
+			}
 			if _, e := db.Exec("DELETE FROM app_user WHERE id=?", id); e != nil {
 				t.Error(e)
 			}
@@ -460,6 +464,87 @@ func TestIntegrationGrab(t *testing.T) {
 		}
 		expire(id)
 		recoverAll()
+	})
+	t.Run("projection_and_candidate_ttl_with_terminal_reconciliation", func(t *testing.T) {
+		id := newTask()
+		key := g.stateKey(id)
+		ttlBetween := func(key string, low, high time.Duration) {
+			t.Helper()
+			got, err := cache.PTTL(ctx, key).Result()
+			if err != nil || got <= low || got > high {
+				t.Fatalf("PTTL %s = %v, %v, want (%v, %v]", key, got, err, low, high)
+			}
+		}
+		if result, err := g.script(ctx, "begin_projection_rebuild", []string{key}, uuid.NewString(), 5000, "true"); err != nil || result != 1 {
+			t.Fatalf("begin rebuild: %d, %v", result, err)
+		}
+		ttlBetween(key, time.Second, 5*time.Second)
+		if err := cache.Del(ctx, key).Err(); err != nil {
+			t.Fatal(err)
+		}
+		if err := g.syncProjection(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		ttlBetween(key, 23*time.Hour, 24*time.Hour)
+		if err := cache.Expire(ctx, key, 5*time.Minute).Err(); err != nil {
+			t.Fatal(err)
+		}
+		req, isOwner, err := g.registerGrab(ctx, runner, uuid.NewString(), GrabCommand{ErrandID: id}, make([]byte, sha256.Size))
+		if err != nil || !isOwner {
+			t.Fatalf("register: %v, %v", isOwner, err)
+		}
+		if got, err := g.acquire(ctx, req); err != nil || got != 0 {
+			t.Fatalf("acquire: %d, %v", got, err)
+		}
+		ttlBetween(key, 23*time.Hour, 24*time.Hour)
+
+		candidateKeys := g.candidateKeys(id)
+		if err := offerCandidate.Run(ctx, cache, candidateKeys, fmt.Sprint(runner.ID), 1, 0, req.Token).Err(); err != nil {
+			t.Fatal(err)
+		}
+		for _, candidateKey := range candidateKeys {
+			ttlBetween(candidateKey, 23*time.Hour, 24*time.Hour)
+		}
+		execSQL("UPDATE errand SET status='CANCELLED',version=version+1 WHERE id=?", id)
+		if _, err := g.ReconcileBatch(ctx, id-1, 1); err != nil {
+			t.Fatal(err)
+		}
+		n, err := cache.Exists(ctx, candidateKeys...).Result()
+		if err != nil || n != 0 {
+			t.Fatalf("terminal candidates survived reconciliation: %d, %v", n, err)
+		}
+		if count("SELECT COUNT(*) FROM grab_repair_task WHERE errand_id=? AND kind='PROJECTION' AND state='PENDING'", id) != 1 {
+			t.Fatal("terminal drift was not scheduled for repair")
+		}
+		if err := g.ApplyRepair(ctx, RepairTask{Kind: "PROJECTION", ErrandID: id}); err != nil {
+			t.Fatal(err)
+		}
+		state, err := cache.HGetAll(ctx, key).Result()
+		if err != nil || state["status"] != "CANCELLED" || state["dbVersion"] != "2" || state["reservationToken"] != "" {
+			t.Fatalf("bad terminal projection: %v, %v", state, err)
+		}
+		ttlBetween(key, 9*time.Minute, 10*time.Minute)
+
+		execSQL("DELETE FROM grab_repair_task WHERE errand_id=?", id)
+		if err := cache.Del(ctx, key).Err(); err != nil {
+			t.Fatal(err)
+		}
+		for _, status := range []string{"CANCELLED", "DRAFT"} {
+			execSQL("UPDATE errand SET status=? WHERE id=?", status, id)
+			if _, err := g.ReconcileBatch(ctx, id-1, 1); err != nil {
+				t.Fatal(err)
+			}
+			if count("SELECT COUNT(*) FROM grab_repair_task WHERE errand_id=?", id) != 0 {
+				t.Fatalf("missing %s projection was queued for rebuild", status)
+			}
+			if err := g.ApplyRepair(ctx, RepairTask{Kind: "PROJECTION", ErrandID: id}); err != nil {
+				t.Fatal(err)
+			}
+			n, err := cache.Exists(ctx, key).Result()
+			if err != nil || n != 0 {
+				t.Fatalf("old repair recreated %s projection: %d, %v", status, n, err)
+			}
+		}
 	})
 	t.Run("string_versions_above_JS_precision_and_missing_projection_rebuild", func(t *testing.T) {
 		id := newTask()

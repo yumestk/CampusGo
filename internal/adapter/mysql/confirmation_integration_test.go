@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/yumestk/CampusGo/internal/application"
 	"github.com/yumestk/CampusGo/internal/auth"
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
@@ -76,6 +77,7 @@ func TestIntegrationD4(t *testing.T) {
 		id := newID()
 		manifest("user", id)
 		execSQL("INSERT INTO app_user (id,campus_id,display_name) VALUES (?,?,'D4验证用户')", id, campus)
+		execSQL("INSERT INTO wallet_account(id,owner_id,owner_type,available,frozen,version) VALUES (?,?,'USER',0,0,0)", id, id)
 		owned = append(owned, id)
 		return auth.User{ID: id, CampusID: campus, Role: "STUDENT"}
 	}
@@ -100,6 +102,9 @@ func TestIntegrationD4(t *testing.T) {
 		}
 		for _, id := range owned {
 			db.Exec("DELETE FROM credit_score WHERE user_id=?", id)
+			if _, e := db.Exec("DELETE FROM wallet_account WHERE owner_id=? AND owner_type='USER'", id); e != nil {
+				t.Error(e)
+			}
 			if _, e := db.Exec("DELETE FROM app_user WHERE id=?", id); e != nil {
 				t.Error(e)
 			}
@@ -159,6 +164,63 @@ func TestIntegrationD4(t *testing.T) {
 		}
 		return Candidate{RunnerID: u.ID, Round: round, Token: token}
 	}
+	t.Run("missing_runner_wallet_rejected_before_acceptance", func(t *testing.T) {
+		missing := newUser(1)
+		own := locked(missing)
+		id := locked(runner)
+		execSQL("DELETE FROM wallet_account WHERE owner_id=? AND owner_type='USER'", missing.ID)
+		requireCode(t, g.offerCandidate(ctx, grabRequest{RunnerID: missing.ID, ErrandID: id, CampusID: 1, Round: 0}), "ACCOUNT_NOT_FOUND")
+		candidate, err := g.PeekCandidate(ctx, id)
+		if err != nil || candidate != nil {
+			t.Fatalf("missing wallet entered candidate queue: %+v, %v", candidate, err)
+		}
+		for _, task := range []int64{newTask(), id} {
+			result, err := g.Grab(ctx, missing, uuid.NewString(), GrabCommand{ErrandID: task, ExpectedRound: 0})
+			if err != nil || result.State != "REJECTED" || result.ErrorCode != "ACCOUNT_NOT_FOUND" {
+				t.Fatalf("grab without wallet: %+v, %v", result, err)
+			}
+		}
+		_, err = g.Confirm(ctx, missing, own, 0)
+		requireCode(t, err, "ACCOUNT_NOT_FOUND")
+		assertStatus(own, "LOCKED", 0, missing.ID)
+
+		// Simulate an already registered candidate from before wallet validation.
+		bad := offer(id, missing, 0, 1)
+		good := newUser(1)
+		offer(id, good, 0, 2)
+		due(id)
+		card, _, err := g.TimeoutSnapshot(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := g.TimeoutStep(ctx, card, &bad); got != "ACCOUNT_NOT_FOUND" || err != nil {
+			t.Fatalf("promotion without wallet: %s, %v", got, err)
+		}
+		if got, err := g.HandleTimeout(ctx, id, 0); got != "TRANSFERRED" || err != nil {
+			t.Fatalf("promotion of next candidate: %s, %v", got, err)
+		}
+		assertStatus(id, "LOCKED", 1, good.ID)
+	})
+	t.Run("due_scan_pages_past_failed_confirmation_timeouts", func(t *testing.T) {
+		bad := locked(runner)
+		good := locked(runner)
+		// Same deadline makes the second page depend on the ID tie-breaker.
+		execSQL("UPDATE errand SET confirm_deadline='2001-01-01' WHERE id IN (?,?)", bad, good)
+		execSQL("UPDATE errand SET round=2147483647 WHERE id=?", bad)
+		defer execSQL("UPDATE errand SET confirm_deadline=TIMESTAMPADD(HOUR,1,CURRENT_TIMESTAMP(3)),round=0 WHERE id=?", bad)
+
+		var failed []int64
+		scanner := &application.Timeouts{Store: g, Candidates: g, OnDueError: func(id int64, _ error) {
+			failed = append(failed, id)
+		}}
+		if err := scanner.ScanDue(ctx, 1); err == nil || len(failed) != 1 || failed[0] != bad {
+			t.Fatalf("expected only the bad timeout to fail: %v, %v", failed, err)
+		}
+		assertStatus(good, "PUBLISHED", 1, 0)
+		if err := scanner.ScanDue(ctx, 1); err != nil || len(failed) != 1 {
+			t.Fatalf("cooling timeout was retried: %v, %v", failed, err)
+		}
+	})
 	t.Run("confirmation_authority_round_deadline_and_replay", func(t *testing.T) {
 		id := locked(runner)
 		if _, e := g.Confirm(ctx, publisher, id, 0); e == nil {

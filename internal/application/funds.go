@@ -41,13 +41,15 @@ type SettlementStore interface {
 	FinishRecovery(context.Context, FundRecovery, error) error
 	Dead(context.Context) ([]FundRecovery, error)
 	Replay(context.Context, string, string) (bool, error)
-	DueSettlements(context.Context) ([]contracts.DueSettlement, error)
+	DueSettlements(context.Context, contracts.DueCursor, int) ([]contracts.DueTask, error)
 	ValidAutoSettle(context.Context, int64, int64, int, int64, time.Time) (bool, error)
 }
 type Funds struct {
-	Store  SettlementStore
-	Send   func(context.Context, FundEvent) (func(bool) error, error)
-	Record func(string, string)
+	Store      SettlementStore
+	Send       func(context.Context, FundEvent) (func(bool) error, error)
+	Record     func(string, string)
+	OnDueError func(int64, error)
+	due        dueScan
 }
 
 func (f *Funds) record(op, outcome string) {
@@ -198,19 +200,13 @@ func (f *Funds) Recover(ctx context.Context) error {
 	return nil
 }
 func (f *Funds) ScanAutoSettle(ctx context.Context) error {
-	tasks, err := f.Store.DueSettlements(ctx)
-	if err != nil {
-		return err
-	}
-	for _, t := range tasks {
+	return f.due.run(ctx, 50, f.Store.DueSettlements, func(ctx context.Context, t contracts.DueTask) error {
 		key := autoUUID(fmt.Sprintf("auto-settle:%d:%d:%d", t.ID, t.Round, time.Now().Unix()/60))
-		_, e := f.Execute(ctx, contracts.Actor{ID: -1, CampusID: t.CampusID}, key, FundCommand{ErrandID: t.ID, Round: t.Round, Action: "AUTO_SETTLE"})
-		if e != nil {
-			return e
-		}
-	}
-	return nil
+		_, err := f.Execute(ctx, contracts.Actor{ID: -1, CampusID: t.CampusID}, key, FundCommand{ErrandID: t.ID, Round: t.Round, Action: "AUTO_SETTLE"})
+		return err
+	}, f.OnDueError)
 }
+
 func (f *Funds) ConsumeAutoSettle(ctx context.Context, body []byte) (string, error) {
 	var p struct {
 		ErrandID string `json:"errandId"`

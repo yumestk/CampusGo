@@ -28,6 +28,19 @@ var projectionScripts = func() map[string]*redis.Script {
 	return scripts
 }()
 
+const (
+	activeProjectionTTL   = 24 * time.Hour
+	inactiveProjectionTTL = 10 * time.Minute
+)
+
+func activeProjection(status string) bool {
+	switch status {
+	case "PUBLISHED", "LOCKED", "ACCEPTED", "PICKED_UP", "DELIVERED", "DISPUTED":
+		return true
+	}
+	return false
+}
+
 func (g *TaskStore) stateKey(id int64) string {
 	return fmt.Sprintf("campusgo:%s:grab:v2:{%d}:state", g.Namespace, id)
 }
@@ -42,7 +55,12 @@ func projectionArgs(c Card) []any {
 	if c.GrabberID != nil {
 		owner = strconv.FormatInt(*c.GrabberID, 10)
 	}
-	return []any{strconv.FormatInt(c.Version, 10), strconv.Itoa(c.Round), c.Status, strconv.Itoa(c.SlotTaken), owner}
+	active := activeProjection(c.Status)
+	ttl := inactiveProjectionTTL
+	if active {
+		ttl = activeProjectionTTL
+	}
+	return []any{strconv.FormatInt(c.Version, 10), strconv.Itoa(c.Round), c.Status, strconv.Itoa(c.SlotTaken), owner, ttl.Milliseconds(), strconv.FormatBool(active)}
 }
 func (g *TaskStore) syncProjection(ctx context.Context, id int64) error {
 	c, err := scan(g.DB.QueryRowContext(ctx, "SELECT "+columns+" FROM errand WHERE id=?", id))
@@ -57,9 +75,12 @@ func (g *TaskStore) syncProjection(ctx context.Context, id int64) error {
 	if code == 3 {
 		// Claim INIT before reading SQL. An old event snapshot must never initialize a missing key.
 		token := uuid.NewString()
-		ok, e := g.script(ctx, "begin_projection_rebuild", []string{g.stateKey(id)}, token, 5000)
+		ok, e := g.script(ctx, "begin_projection_rebuild", []string{g.stateKey(id)}, token, 5000, strconv.FormatBool(activeProjection(c.Status)))
 		if e != nil {
 			return e
+		}
+		if ok == 2 {
+			return nil // An inactive projection expired before rebuild could claim it.
 		}
 		if ok != 1 {
 			return fmt.Errorf("projection rebuild busy")
@@ -91,7 +112,7 @@ func (g *TaskStore) syncProjection(ctx context.Context, id int64) error {
 	return nil
 }
 func (g *TaskStore) acquire(ctx context.Context, r grabRequest) (int64, error) {
-	return g.script(ctx, "acquire_pending", []string{g.stateKey(r.ErrandID), g.revokedKey(r)}, strconv.FormatInt(r.ID, 10), r.Token, strconv.FormatInt(r.BaseVersion, 10), strconv.Itoa(r.Round), strconv.FormatInt(r.RunnerID, 10), r.LeaseUntil.UnixMilli())
+	return g.script(ctx, "acquire_pending", []string{g.stateKey(r.ErrandID), g.revokedKey(r)}, strconv.FormatInt(r.ID, 10), r.Token, strconv.FormatInt(r.BaseVersion, 10), strconv.Itoa(r.Round), strconv.FormatInt(r.RunnerID, 10), r.LeaseUntil.UnixMilli(), activeProjectionTTL.Milliseconds())
 }
 func (g *TaskStore) revoke(ctx context.Context, r grabRequest) error {
 	_, err := g.script(ctx, "revoke_pending", []string{g.stateKey(r.ErrandID), g.revokedKey(r)}, strconv.FormatInt(r.ID, 10), r.Token, strconv.FormatInt(r.BaseVersion, 10), strconv.Itoa(r.Round), r.LeaseUntil.UnixMilli(), int64(time.Minute/time.Millisecond))

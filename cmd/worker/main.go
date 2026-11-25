@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 
 	mysqlstore "github.com/yumestk/CampusGo/internal/adapter/mysql"
 	"github.com/yumestk/CampusGo/internal/application"
+	"github.com/yumestk/CampusGo/internal/failure"
 	"github.com/yumestk/CampusGo/internal/fundmq"
 	"github.com/yumestk/CampusGo/internal/platform/config"
 	"github.com/yumestk/CampusGo/internal/platform/database"
@@ -75,8 +77,18 @@ func run(logger *slog.Logger) error {
 		DB: db, IDs: ids,
 		Invalidate: func(c context.Context, id int64) { _ = details.Invalidate(c, id) },
 	}
-	funds := &application.Funds{Store: fundStore, Send: mq.Send, Record: mysqlstore.NewFundRecorder(registry)}
-	timeouts := &application.Timeouts{Store: g, Candidates: g}
+	reportDueError := func(operation string) func(int64, error) {
+		return func(id int64, err error) {
+			code := "DEPENDENCY_UNAVAILABLE"
+			var f *failure.Error
+			if errors.As(err, &f) {
+				code = f.Code
+			}
+			logger.Error("due errand processing failed", "operation", operation, "errand_id", id, "code", code, "cause_type", fmt.Sprintf("%T", err))
+		}
+	}
+	funds := &application.Funds{Store: fundStore, Send: mq.Send, Record: mysqlstore.NewFundRecorder(registry), OnDueError: reportDueError("auto_settle")}
+	timeouts := &application.Timeouts{Store: g, Candidates: g, OnDueError: reportDueError("confirm_timeout")}
 	var workers sync.WaitGroup
 	onError := func(err error) { logger.Error("worker operation failed", "cause_type", fmt.Sprintf("%T", err)) }
 	for _, run := range []func(){func() { mq.Run(ctx, funds, os.Getenv("CAMPUSGO_MQ_ENDPOINT"), true, onError) }, func() { funds.Run(ctx, onError) }, func() {

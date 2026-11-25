@@ -550,6 +550,31 @@ func TestIntegrationD5(t *testing.T) {
 		}
 		reconcile()
 	})
+	t.Run("due_scan_continues_after_failed_autosettlement", func(t *testing.T) {
+		bad, good := delivered(1001), delivered(1001)
+		exec("UPDATE errand SET delivered_at='2001-01-01' WHERE id IN (?,?)", bad, good)
+		defer exec("UPDATE errand SET delivered_at=CURRENT_TIMESTAMP(3) WHERE id=?", bad)
+
+		sendError := errors.New("simulated per-order half-message failure")
+		var failedAttempts int
+		scanner := newTestFunds(g, func(ctx context.Context, event FundEvent) (func(bool) error, error) {
+			if event.ErrandID == bad {
+				failedAttempts++
+				return nil, sendError
+			}
+			return sender(ctx, event)
+		})
+		if err := scanner.ScanAutoSettle(ctx); !errors.Is(err, sendError) || failedAttempts != 1 {
+			t.Fatalf("failed settlement attempts=%d, err=%v", failedAttempts, err)
+		}
+		if state(bad) != "DELIVERED" || state(good) != "SETTLED" {
+			t.Fatalf("unexpected settlement states for failed and healthy orders: %s, %s", state(bad), state(good))
+		}
+		if err := scanner.ScanAutoSettle(ctx); err != nil || failedAttempts != 1 {
+			t.Fatalf("cooling settlement retried: %d, %v", failedAttempts, err)
+		}
+		reconcile()
+	})
 	t.Run("recovery_receipt_duplicate_and_reasoned_dead_replay", func(t *testing.T) {
 		id := delivered(1001)
 		key := uuid.NewString()

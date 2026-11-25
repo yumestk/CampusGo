@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/yumestk/CampusGo/internal/auth"
-	"github.com/yumestk/CampusGo/internal/contracts"
 	taskdomain "github.com/yumestk/CampusGo/internal/domain/errand"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 )
@@ -24,11 +23,18 @@ func lockRunner(ctx context.Context, tx *sql.Tx, id, campus int64) (bool, error)
 	}
 	return actual == campus && active && (role == "STUDENT" || role == "ARBITRATOR"), err
 }
-func runnerEligible(ctx context.Context, tx *sql.Tx, id int64) (string, error) {
+
+const runnerWalletExists = "EXISTS (SELECT 1 FROM wallet_account WHERE owner_id=? AND owner_type='USER')"
+
+func runnerEligible(ctx context.Context, q rowQuery, id int64) (string, error) {
+	var hasWallet bool
 	var score, ongoing int
-	err := tx.QueryRowContext(ctx, "SELECT COALESCE((SELECT score FROM credit_score WHERE user_id=?),60),(SELECT COUNT(*) FROM errand WHERE grabber_id=? AND status IN ('ACCEPTED','PICKED_UP'))", id, id).Scan(&score, &ongoing)
+	err := q.QueryRowContext(ctx, "SELECT "+runnerWalletExists+",COALESCE((SELECT score FROM credit_score WHERE user_id=?),60),(SELECT COUNT(*) FROM errand WHERE grabber_id=? AND status IN ('ACCEPTED','PICKED_UP'))", id, id, id).Scan(&hasWallet, &score, &ongoing)
 	if err != nil {
 		return "", err
+	}
+	if !hasWallet {
+		return "ACCOUNT_NOT_FOUND", nil
 	}
 	return taskdomain.Eligible(score, ongoing), nil
 }
@@ -150,6 +156,9 @@ func (g *TaskStore) timeoutStep(ctx context.Context, c Card, next *Candidate, ho
 		if e != nil {
 			return "", e
 		}
+		if reason == "ACCOUNT_NOT_FOUND" {
+			return reason, nil
+		}
 		if reason != "" {
 			return "INELIGIBLE", nil
 		}
@@ -232,30 +241,4 @@ func (g *TaskStore) PeekCandidate(ctx context.Context, id int64) (*Candidate, er
 }
 func (g *TaskStore) RemoveCandidate(ctx context.Context, id int64, c Candidate) error {
 	return g.removeCandidate(ctx, id, c)
-}
-
-func (g *TaskStore) DueTimeouts(ctx context.Context, limit int) ([]contracts.DueTask, error) {
-	if limit < 1 || limit > 100 {
-		return nil, fmt.Errorf("invalid scan limit")
-	}
-	rows, err := g.DB.QueryContext(ctx, "SELECT id,round FROM errand WHERE status='LOCKED' AND confirm_deadline<=CURRENT_TIMESTAMP(3) ORDER BY confirm_deadline,id LIMIT ?", limit)
-	if err != nil {
-		return nil, err
-	}
-
-	tasks := []contracts.DueTask{}
-	for rows.Next() {
-		var t contracts.DueTask
-		if err = rows.Scan(&t.ID, &t.Round); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		tasks = append(tasks, t)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return nil, err
-	}
-	return tasks, nil
 }

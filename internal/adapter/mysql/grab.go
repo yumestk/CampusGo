@@ -110,16 +110,17 @@ func (g *TaskStore) grabEligibility(ctx context.Context, q rowQuery, u auth.User
 		return "", err
 	}
 	task := taskdomain.Restore(taskdomain.Snapshot{CampusID: campus, PublisherID: publisher, RunnerID: grabber.Int64, Version: currentVersion, Round: round, Slots: slot, Status: status})
-	if reason := task.Grab(taskActor(u), c.ExpectedRound, version); reason != "" {
+	reason := task.Grab(taskActor(u), c.ExpectedRound, version)
+	if reason != "" && reason != "SLOT_FULL" {
 		return reason, nil
 	}
-	var score, ongoing int
-	err = q.QueryRowContext(ctx, "SELECT COALESCE((SELECT score FROM credit_score WHERE user_id=?),60),(SELECT COUNT(*) FROM errand WHERE grabber_id=? AND status IN ('ACCEPTED','PICKED_UP'))", u.ID, u.ID).Scan(&score, &ongoing)
-	if err != nil {
-		return "", err
+	eligibility, err := runnerEligible(ctx, q, u.ID)
+	if err != nil || eligibility == "ACCOUNT_NOT_FOUND" || reason == "" {
+		return eligibility, err
 	}
-	return taskdomain.Eligible(score, ongoing), nil
+	return reason, nil
 }
+
 func (g *TaskStore) commitGrab(ctx context.Context, u auth.User, r grabRequest, hook func(string)) (GrabResult, error) {
 	tx, err := g.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {

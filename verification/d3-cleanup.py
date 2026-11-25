@@ -28,6 +28,7 @@ DELETE FROM grab_request WHERE errand_id IN ({task_ids});
 DELETE FROM errand_status_log WHERE errand_id IN ({task_ids});
 DELETE FROM errand WHERE id IN ({task_ids});
 DELETE FROM credit_score WHERE user_id IN ({user_ids});
+DELETE FROM wallet_account WHERE owner_id IN ({user_ids}) AND owner_type='USER' AND available=0 AND frozen=0 AND version=0;
 DELETE FROM app_user WHERE id IN ({user_ids});
 COMMIT;
 """

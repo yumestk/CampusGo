@@ -35,7 +35,3 @@ type FundRecovery struct {
 	Reason      string    `json:"reason"`
 	LastError   string    `json:"lastError"`
 }
-type DueSettlement struct {
-	ID, CampusID int64
-	Round        int
-}

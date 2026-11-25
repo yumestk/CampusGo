@@ -1,4 +1,4 @@
--- ARGV: buildToken, dbVersion, round, status, slotTaken, ownerRunnerId
+-- ARGV: buildToken, dbVersion, round, status, slotTaken, ownerRunnerId, ttlMillis, active
 local clock = redis.call('TIME')
 local now = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
 if redis.call('HGET', KEYS[1], 'mode') ~= 'INIT'
@@ -7,4 +7,5 @@ if redis.call('HGET', KEYS[1], 'mode') ~= 'INIT'
 redis.call('HSET', KEYS[1], 'mode','READY','dbVersion',ARGV[2],'round',ARGV[3],
     'status',ARGV[4],'slotTaken',ARGV[5],'ownerRunnerId',ARGV[6])
 redis.call('HDEL', KEYS[1], 'buildToken','buildUntil')
+redis.call('PEXPIRE', KEYS[1], ARGV[7])
 return 1

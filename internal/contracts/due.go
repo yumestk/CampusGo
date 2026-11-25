@@ -1,6 +1,14 @@
 package contracts
 
+import "time"
+
+type DueCursor struct {
+	At time.Time
+	ID int64
+}
+
 type DueTask struct {
-	ID    int64
-	Round int
+	DueCursor
+	CampusID int64
+	Round    int
 }

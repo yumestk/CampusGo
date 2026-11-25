@@ -15,7 +15,7 @@ type TimeoutStore interface {
 	TimeoutSnapshot(context.Context, int64) (contracts.Card, bool, error)
 	TimeoutCycle(context.Context, int64) (int, error)
 	TimeoutStep(context.Context, contracts.Card, *contracts.Candidate) (string, error)
-	DueTimeouts(context.Context, int) ([]contracts.DueTask, error)
+	DueTimeouts(context.Context, contracts.DueCursor, int) ([]contracts.DueTask, error)
 	ValidTimeout(context.Context, int64, int64, int, int64, time.Time) (bool, error)
 }
 type Candidates interface {
@@ -25,6 +25,8 @@ type Candidates interface {
 type Timeouts struct {
 	Store      TimeoutStore
 	Candidates Candidates
+	OnDueError func(int64, error)
+	due        dueScan
 }
 
 func (g *Timeouts) HandleTimeout(ctx context.Context, id int64, round int) (string, error) {
@@ -63,7 +65,7 @@ func (g *Timeouts) HandleTimeout(ctx context.Context, id int64, round int) (stri
 		if e != nil {
 			return "", e
 		}
-		if outcome == "INELIGIBLE" {
+		if outcome == "INELIGIBLE" || outcome == "ACCOUNT_NOT_FOUND" {
 			if e = g.Candidates.RemoveCandidate(ctx, id, *candidate); e != nil {
 				return "", e
 			}
@@ -111,17 +113,12 @@ func (g *Timeouts) ConsumeTimeout(ctx context.Context, body []byte) (string, err
 }
 
 func (g *Timeouts) ScanDue(ctx context.Context, limit int) error {
-	tasks, err := g.Store.DueTimeouts(ctx, limit)
-	if err != nil {
+	return g.due.run(ctx, limit, g.Store.DueTimeouts, func(ctx context.Context, t contracts.DueTask) error {
+		_, err := g.HandleTimeout(ctx, t.ID, t.Round)
 		return err
-	}
-	for _, t := range tasks {
-		if _, err = g.HandleTimeout(ctx, t.ID, t.Round); err != nil {
-			return err
-		}
-	}
-	return nil
+	}, g.OnDueError)
 }
+
 func (g *Timeouts) RunTimeoutScan(ctx context.Context, onError func(error)) {
 	timer := time.NewTicker(time.Second)
 	defer timer.Stop()

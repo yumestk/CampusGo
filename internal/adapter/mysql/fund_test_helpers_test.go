@@ -22,8 +22,7 @@ func (f *testFunds) execute(ctx context.Context, u auth.User, key string, c Fund
 	store := *f.store
 	store.beforeCommit = before
 	store.commit = commit
-	app := *f.Funds
-	app.Store = &store
+	app := &application.Funds{Store: &store, Send: f.Send, Record: f.Record, OnDueError: f.OnDueError}
 	return app.Execute(ctx, u, key, c)
 }
 
