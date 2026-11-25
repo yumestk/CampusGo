@@ -161,10 +161,32 @@ func TestIntegrationGrab(t *testing.T) {
 		}
 		return s
 	}
-	var walletBefore string
-	if err = db.QueryRow("SELECT GROUP_CONCAT(CONCAT(id,':',available,':',frozen,':',version) ORDER BY id) FROM wallet_account").Scan(&walletBefore); err != nil {
-		t.Fatal(err)
+	type walletSnapshot struct {
+		available, frozen, version int64
 	}
+	readWallets := func() map[int64]walletSnapshot {
+		t.Helper()
+		rows, err := db.QueryContext(ctx, "SELECT id, available, frozen, version FROM wallet_account")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+
+		wallets := make(map[int64]walletSnapshot)
+		for rows.Next() {
+			var id int64
+			var wallet walletSnapshot
+			if err := rows.Scan(&id, &wallet.available, &wallet.frozen, &wallet.version); err != nil {
+				t.Fatal(err)
+			}
+			wallets[id] = wallet
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
+		return wallets
+	}
+	walletBefore := readWallets()
 
 	t.Run("pre_refactor_persisted_grab_request_resume", func(t *testing.T) {
 		id := newTask()
@@ -952,9 +974,31 @@ func TestIntegrationGrab(t *testing.T) {
 		}
 	})
 	recoverAll()
-	var walletAfter string
-	if err = db.QueryRow("SELECT GROUP_CONCAT(CONCAT(id,':',available,':',frozen,':',version) ORDER BY id) FROM wallet_account").Scan(&walletAfter); err != nil || walletBefore != walletAfter {
-		t.Fatal("grab changed D2 wallet balances", err)
+	walletAfter := readWallets()
+	for id, before := range walletBefore {
+		after, exists := walletAfter[id]
+		if !exists {
+			t.Errorf("grab removed existing wallet %d: before=%+v", id, before)
+		} else if after != before {
+			t.Errorf("grab changed existing wallet %d: before=%+v after=%+v", id, before, after)
+		}
+	}
+	ownedWallets := make(map[int64]bool, len(owned))
+	for _, id := range owned {
+		ownedWallets[id] = true
+		if _, exists := walletAfter[id]; !exists {
+			t.Errorf("grab removed fixture wallet %d", id)
+		}
+	}
+	for id, after := range walletAfter {
+		if _, exists := walletBefore[id]; exists {
+			continue
+		}
+		if !ownedWallets[id] {
+			t.Errorf("grab created a wallet outside the owned fixtures: id=%d wallet=%+v", id, after)
+		} else if after != (walletSnapshot{}) {
+			t.Errorf("grab changed new fixture wallet %d: after=%+v", id, after)
+		}
 	}
 }
 

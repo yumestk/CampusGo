@@ -12,6 +12,8 @@ import (
 
 var poisonDueOrder = errors.New("poison due order")
 
+const timeoutProbeRound = 5
+
 type dueOrders struct {
 	at       time.Time
 	poisons  int64
@@ -21,12 +23,12 @@ type dueOrders struct {
 	pages    int
 }
 
-func (q *dueOrders) page(_ context.Context, after contracts.DueCursor, limit int) ([]contracts.DueTask, error) {
+func (q *dueOrders) page(after contracts.DueCursor, limit, round int) ([]contracts.DueTask, error) {
 	q.pages++
 	var rows []contracts.DueTask
 	for id := after.ID + 1; id <= q.last && len(rows) < limit; id++ {
 		if !q.done[id] {
-			rows = append(rows, contracts.DueTask{DueCursor: contracts.DueCursor{At: q.at, ID: id}, CampusID: 1})
+			rows = append(rows, contracts.DueTask{DueCursor: contracts.DueCursor{At: q.at, ID: id}, CampusID: 1, Round: round})
 		}
 	}
 	return rows, nil
@@ -46,8 +48,8 @@ type dueFundsProbe struct {
 	*dueOrders
 }
 
-func (s dueFundsProbe) DueSettlements(ctx context.Context, after contracts.DueCursor, limit int) ([]contracts.DueTask, error) {
-	return s.page(ctx, after, limit)
+func (s dueFundsProbe) DueSettlements(_ context.Context, after contracts.DueCursor, limit int) ([]contracts.DueTask, error) {
+	return s.page(after, limit, 0)
 }
 func (s dueFundsProbe) Prepare(_ context.Context, _ contracts.Actor, _ string, c FundCommand, _ []byte) (FundEvent, *FundResult, error) {
 	err := s.apply(c.ErrandID)
@@ -59,11 +61,11 @@ type dueTimeoutProbe struct {
 	*dueOrders
 }
 
-func (s dueTimeoutProbe) DueTimeouts(ctx context.Context, after contracts.DueCursor, limit int) ([]contracts.DueTask, error) {
-	return s.page(ctx, after, limit)
+func (s dueTimeoutProbe) DueTimeouts(_ context.Context, after contracts.DueCursor, limit int) ([]contracts.DueTask, error) {
+	return s.page(after, limit, timeoutProbeRound)
 }
 func (s dueTimeoutProbe) TimeoutSnapshot(_ context.Context, id int64) (contracts.Card, bool, error) {
-	return contracts.Card{ID: id, Status: "LOCKED", Round: 5}, true, nil
+	return contracts.Card{ID: id, Status: "LOCKED", Round: timeoutProbeRound}, true, nil
 }
 func (s dueTimeoutProbe) TimeoutCycle(context.Context, int64) (int, error) { return 0, nil }
 func (s dueTimeoutProbe) TimeoutStep(_ context.Context, c contracts.Card, _ *contracts.Candidate) (string, error) {
