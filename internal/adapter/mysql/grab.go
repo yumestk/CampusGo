@@ -316,8 +316,13 @@ func (g *TaskStore) ObserveGrab(ctx context.Context, r grabRequest) (GrabResult,
 }
 func (g *TaskStore) CommitGrab(ctx context.Context, u contracts.Actor, r grabRequest) (GrabResult, error) {
 	result, err := g.commitGrab(ctx, u, r, g.grabHook)
-	if err == nil && g.grabHook != nil {
-		g.grabHook("committed")
+	if err == nil {
+		if g.grabHook != nil {
+			g.grabHook("committed")
+		}
+		if result.State == "SUCCEEDED" {
+			_ = g.invalidateDetail(ctx, r.ErrandID, r.BaseVersion+1)
+		}
 	}
 	return result, err
 }
@@ -333,7 +338,6 @@ func (g *TaskStore) AcquireGrab(ctx context.Context, r grabRequest) (int64, erro
 }
 func (g *TaskStore) PublishGrabProjection(ctx context.Context, id int64) {
 	_ = g.syncProjection(ctx, id)
-	_ = g.invalidateDetail(ctx, id)
 	if g.grabHook != nil {
 		g.grabHook("projected")
 	}

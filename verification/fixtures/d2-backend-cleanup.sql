@@ -7,6 +7,7 @@ START TRANSACTION;
 DELETE r FROM publish_request r JOIN app_user u ON u.id=r.publisher_id WHERE u.display_name='D2资金验证';
 DELETE e FROM escrow_order e JOIN app_user u ON u.id=e.publisher_id WHERE u.display_name='D2资金验证';
 DELETE l FROM errand_status_log l JOIN app_user u ON u.id=l.operator_id WHERE u.display_name='D2资金验证';
+DELETE r FROM grab_repair_task r JOIN errand e ON e.id=r.errand_id JOIN app_user u ON u.id=e.publisher_id WHERE u.display_name='D2资金验证';
 DELETE e FROM errand e JOIN app_user u ON u.id=e.publisher_id WHERE u.display_name='D2资金验证';
 DELETE l FROM wallet_ledger l JOIN app_user u ON u.id=l.user_id WHERE u.display_name='D2资金验证';
 DELETE a FROM wallet_account a JOIN app_user u ON u.id=a.owner_id WHERE a.owner_type='USER' AND u.display_name='D2资金验证';

@@ -3,10 +3,12 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,10 +20,11 @@ import (
 )
 
 type DetailCache struct {
-	Redis     *redis.Client
-	Namespace string
-	Events    *prometheus.CounterVec
-	refresh   chan detailRefresh
+	Redis      *redis.Client
+	Namespace  string
+	LegacyRead bool
+	Events     *prometheus.CounterVec
+	refresh    chan detailRefresh
 }
 
 func NewDetailCache(r *redis.Client, namespace string, registry *prometheus.Registry) *DetailCache {
@@ -34,20 +37,74 @@ func (c *DetailCache) count(op string) {
 		c.Events.WithLabelValues(op).Inc()
 	}
 }
+
+const detailWatermarkTTL = 30 * time.Minute
+
+//go:embed lua/detail_cache.lua
+var detailCacheLua string
+
+var writeDetail = redis.NewScript(detailCacheLua)
+
+func detailPrefix(namespace string, id int64) string {
+	return fmt.Sprintf("campusgo:%s:detail:{%d}:", namespace, id)
+}
+
 func detailKey(namespace string, id int64, shard int) string {
+	return detailPrefix(namespace, id) + strconv.Itoa(shard)
+}
+
+func detailKeys(namespace string, id int64) []string {
+	prefix := detailPrefix(namespace, id)
+	return []string{prefix + "version", prefix + "empty", prefix + "0", prefix + "1", prefix + "2", prefix + "3"}
+}
+
+func legacyDetailKey(namespace string, id int64, shard int) string {
 	return fmt.Sprintf("campusgo:%s:detail:%d:%d", namespace, id, shard)
 }
 
-func (c *DetailCache) Invalidate(ctx context.Context, id int64) error {
+func (c *DetailCache) readKey(id int64, shard int) string {
+	if c.LegacyRead {
+		return legacyDetailKey(c.Namespace, id, shard)
+	}
+	return detailKey(c.Namespace, id, shard)
+}
+
+func (c *DetailCache) Invalidate(ctx context.Context, id, version int64) error {
+	return c.expire(ctx, id, version, "invalidate")
+}
+
+func (c *DetailCache) PublishDetail(ctx context.Context, id, version int64) error {
+	return c.expire(ctx, id, version, "published")
+}
+
+const clearLegacyNegative = `
+local raw = redis.call('GET', KEYS[1])
+if not raw then return 0 end
+local ok, entry = pcall(cjson.decode, raw)
+if ok and type(entry) == 'table' and entry.empty == true then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+`
+
+func (c *DetailCache) expire(ctx context.Context, id, version int64, operation string) error {
 	if c == nil || c.Redis == nil {
 		return nil
 	}
+	err := writeDetail.Run(ctx, c.Redis, detailKeys(c.Namespace, id), operation, strconv.FormatInt(version, 10), "", 0, detailWatermarkTTL.Milliseconds()).Err()
+	// Legacy shard keys have different hash slots. Each compatibility delete
+	// stays single-key, and failure of either format is returned to the worker.
+	pipe := c.Redis.Pipeline()
 	for shard := range 4 {
-		if err := c.Redis.Del(ctx, detailKey(c.Namespace, id, shard)).Err(); err != nil {
-			return err
+		key := legacyDetailKey(c.Namespace, id, shard)
+		if operation == "published" {
+			pipe.Eval(ctx, clearLegacyNegative, []string{key})
+		} else {
+			pipe.Del(ctx, key)
 		}
 	}
-	return nil
+	_, legacyErr := pipe.Exec(ctx)
+	return errors.Join(err, legacyErr)
 }
 
 type cachedDetail struct {
@@ -56,23 +113,36 @@ type cachedDetail struct {
 	Data  Card  `json:"data"`
 }
 
-func (c *DetailCache) put(ctx context.Context, id int64, card Card, empty bool) {
+func (c *DetailCache) put(ctx context.Context, id int64, card Card, empty bool) bool {
 	if !empty && card.Status == "DRAFT" {
-		return
+		return false
 	}
 	ttl := time.Duration(600+rand.IntN(241)-120) * time.Second
 	logical := ttl / 2
+	operation := "fill"
 	if empty {
-		ttl = 60 * time.Second
+		ttl = time.Minute
 		logical = ttl
+		operation = "negative"
 	}
 	raw, _ := json.Marshal(cachedDetail{time.Now().Add(logical).UnixMilli(), empty, card})
-	for shard := range 4 {
-		if err := c.Redis.Set(ctx, detailKey(c.Namespace, id, shard), raw, ttl).Err(); err != nil {
-			c.count("write_error")
-			return
-		}
+	written, err := writeDetail.Run(ctx, c.Redis, detailKeys(c.Namespace, id), operation, strconv.FormatInt(card.Version, 10), raw, ttl.Milliseconds(), detailWatermarkTTL.Milliseconds()).Int()
+	if err != nil {
+		c.count("write_error")
+		return false
 	}
+	if written != 1 || !c.LegacyRead {
+		return written == 1
+	}
+	pipe := c.Redis.Pipeline()
+	for shard := range 4 {
+		pipe.Set(ctx, legacyDetailKey(c.Namespace, id, shard), raw, ttl)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		c.count("write_error")
+		return false
+	}
+	return true
 }
 
 type detailRefresh struct {
@@ -97,14 +167,15 @@ func (c *DetailCache) RunRefresh(ctx context.Context, db *sql.DB) {
 			case err != nil:
 				c.count("refresh_error")
 			case card.Status == "DRAFT":
-				if err := c.Invalidate(jobCtx, job.id); err != nil {
+				if err := c.Invalidate(jobCtx, job.id, card.Version); err != nil {
 					c.count("refresh_error")
 				}
 			default:
-				c.put(jobCtx, job.id, card, false)
-				c.count("rebuild")
+				if c.put(jobCtx, job.id, card, false) {
+					c.count("rebuild")
+				}
 			}
-			unlockDetail.Run(jobCtx, c.Redis, []string{fmt.Sprintf("campusgo:%s:detail:rebuild:%d", c.Namespace, job.id)}, job.token)
+			unlockDetail.Run(jobCtx, c.Redis, []string{detailPrefix(c.Namespace, job.id) + "rebuild"}, job.token)
 			cancel()
 		}
 	}
@@ -114,7 +185,10 @@ var unlockDetail = redis.NewScript(`if redis.call('GET',KEYS[1])==ARGV[1] then r
 
 func (q Query) cachedDetail(ctx context.Context, u auth.User, id int64) (Card, error) {
 	cache := q.Cache
-	raw, readErr := cache.Redis.Get(ctx, detailKey(cache.Namespace, id, rand.IntN(4))).Bytes()
+	raw, readErr := cache.Redis.Get(ctx, cache.readKey(id, rand.IntN(4))).Bytes()
+	if errors.Is(readErr, redis.Nil) && !cache.LegacyRead {
+		raw, readErr = cache.Redis.Get(ctx, detailPrefix(cache.Namespace, id)+"empty").Bytes()
+	}
 	var cached cachedDetail
 	decoded := readErr == nil && json.Unmarshal(raw, &cached) == nil
 	now := time.Now().UnixMilli()
@@ -142,7 +216,7 @@ func (q Query) cachedDetail(ctx context.Context, u auth.User, id int64) (Card, e
 		cache.count("miss_or_expired")
 	}
 	token := uuid.NewString()
-	lockKey := fmt.Sprintf("campusgo:%s:detail:rebuild:%d", cache.Namespace, id)
+	lockKey := detailPrefix(cache.Namespace, id) + "rebuild"
 	acquired, _ := cache.Redis.SetNX(ctx, lockKey, token, 10*time.Second).Result()
 	if valid && !acquired {
 		cache.count("stale_served")
@@ -180,33 +254,29 @@ func (q Query) cachedDetail(ctx context.Context, u auth.User, id int64) (Card, e
 		return Card{}, fault.New("FORBIDDEN", 403)
 	}
 	// Concurrent misses can read SQL. The rebuild lock owner populates the cache.
-	if acquired && body.Status != "DRAFT" {
-		cache.put(ctx, id, body, false)
+	if acquired && cache.put(ctx, id, body, false) {
 		cache.count("rebuild")
 	}
 	decorate(&body, u)
 	return body, nil
 }
-func (g *TaskStore) invalidateDetail(ctx context.Context, id int64) error {
-	return (&DetailCache{Redis: g.Redis, Namespace: g.Namespace}).Invalidate(ctx, id)
+func (g *TaskStore) invalidateDetail(ctx context.Context, id, version int64) error {
+	return (&DetailCache{Redis: g.Redis, Namespace: g.Namespace}).Invalidate(ctx, id, version)
 }
+
 func (g *TaskStore) reconcileDetail(ctx context.Context, c Card) error {
-	if c.Status == "DRAFT" {
-		return g.invalidateDetail(ctx, c.ID)
+	entries, err := g.Redis.MGet(ctx, detailKeys(g.Namespace, c.ID)[1:]...).Result()
+	if err != nil {
+		return err
 	}
-	for shard := range 4 {
-		raw, err := g.Redis.Get(ctx, detailKey(g.Namespace, c.ID, shard)).Bytes()
-		if errors.Is(err, redis.Nil) {
+	for _, entry := range entries {
+		raw, ok := entry.(string)
+		if !ok {
 			continue
 		}
-		if err != nil {
-			return err
-		}
 		var stored cachedDetail
-		if json.Unmarshal(raw, &stored) != nil || stored.Empty || stored.Data.ID != c.ID || stored.Data.Status == "DRAFT" || stored.Data.Version != c.Version {
-			if err = g.Redis.Del(ctx, detailKey(g.Namespace, c.ID, shard)).Err(); err != nil {
-				return err
-			}
+		if c.Status == "DRAFT" || json.Unmarshal([]byte(raw), &stored) != nil || stored.Empty || stored.Data.ID != c.ID || stored.Data.Status == "DRAFT" || stored.Data.Version < c.Version {
+			return g.invalidateDetail(ctx, c.ID, c.Version)
 		}
 	}
 	return nil

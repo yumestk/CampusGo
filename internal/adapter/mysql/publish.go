@@ -14,11 +14,14 @@ import (
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
 )
 
+const publishedVersion int64 = 1
+
 type PublishStore struct {
-	DB           *sql.DB
-	IDs          *idgen.Generator
-	beforeCommit func(*sql.Tx) error
-	commit       func(*sql.Tx) error
+	DB            *sql.DB
+	IDs           *idgen.Generator
+	PublishDetail func(context.Context, int64, int64) error
+	beforeCommit  func(*sql.Tx) error
+	commit        func(*sql.Tx) error
 }
 
 func scanResult(row *sql.Row, key string) (PublishResult, []byte, error) {
@@ -53,6 +56,7 @@ func (p *PublishStore) Result(ctx context.Context, u auth.User, key string) (Pub
 	if r.State != "SUCCEEDED" && r.State != "REJECTED" {
 		return PublishResult{}, fault.New("INTERNAL_ERROR", 500)
 	}
+	p.repairPublishedDetail(ctx, r)
 	return r, nil
 }
 
@@ -80,6 +84,10 @@ func (p *PublishStore) ApplyPublish(ctx context.Context, u auth.User, key string
 	}
 	if storedResult.State == "SUCCEEDED" || storedResult.State == "REJECTED" {
 		// Read-only replay needs no COMMIT; rollback releases the duplicate-key lock.
+		if err := tx.Rollback(); err != nil {
+			return PublishResult{}, fault.Dependency(err)
+		}
+		p.repairPublishedDetail(ctx, storedResult)
 		return publishOutcome(storedResult)
 	}
 	// database.Open uses MySQL's default clientFoundRows=false: only a new row affects one row.
@@ -157,7 +165,16 @@ func (p *PublishStore) ApplyPublish(ctx context.Context, u auth.User, key string
 	if err = commit(tx); err != nil {
 		return PublishResult{}, &fault.Error{Code: "PUBLISH_RESULT_UNKNOWN", Status: 503, Cause: err}
 	}
+	if r.State == "SUCCEEDED" && r.ErrandID != nil {
+		p.repairPublishedDetail(ctx, r)
+	}
 	return publishOutcome(r)
+}
+
+func (p *PublishStore) repairPublishedDetail(ctx context.Context, r PublishResult) {
+	if r.State == "SUCCEEDED" && r.ErrandID != nil && p.PublishDetail != nil {
+		_ = p.PublishDetail(ctx, *r.ErrandID, publishedVersion)
+	}
 }
 
 func publishOutcome(r PublishResult) (PublishResult, error) {
@@ -173,7 +190,7 @@ func (p *PublishStore) transfer(ctx context.Context, tx *sql.Tx, u auth.User, c 
 	if err := p.postEscrow(ctx, tx, u, c, id, accountID, user, escrow); err != nil {
 		return err
 	}
-	result, err := tx.ExecContext(ctx, "UPDATE errand SET status='PUBLISHED',version=version+1 WHERE id=? AND status='DRAFT' AND version=0", id)
+	result, err := tx.ExecContext(ctx, "UPDATE errand SET status='PUBLISHED',version=? WHERE id=? AND status='DRAFT' AND version=0", publishedVersion, id)
 	if err != nil {
 		return err
 	}
@@ -185,7 +202,10 @@ func (p *PublishStore) transfer(ctx context.Context, tx *sql.Tx, u auth.User, c 
 		return fmt.Errorf("publish transition lost")
 	}
 	_, err = tx.ExecContext(ctx, "INSERT INTO errand_status_log (campus_id,errand_id,from_status,to_status,round,operator_id) VALUES (?,?,'DRAFT','PUBLISHED',0,?)", u.CampusID, id, u.ID)
-	return err
+	if err != nil {
+		return err
+	}
+	return enqueueRepair(ctx, tx, u.CampusID, id, fmt.Sprintf("cache:%d:%d:0", id, publishedVersion), "CACHE_INVALIDATE", nil, 0)
 }
 
 type PublishCommand = contracts.PublishCommand

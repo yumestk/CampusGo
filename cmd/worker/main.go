@@ -75,7 +75,7 @@ func run(logger *slog.Logger) error {
 	details := &mysqlstore.DetailCache{Redis: cache, Namespace: name}
 	fundStore := &mysqlstore.FundStore{
 		DB: db, IDs: ids,
-		Invalidate: func(c context.Context, id int64) { _ = details.Invalidate(c, id) },
+		Invalidate: details.Invalidate,
 	}
 	reportDueError := func(operation string) func(int64, error) {
 		return func(id int64, err error) {

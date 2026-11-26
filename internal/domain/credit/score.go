@@ -20,7 +20,18 @@ func Delta(kind string) (int, bool) {
 	}
 	return 0, false
 }
-func Clamp(score int) int { return min(Maximum, max(Minimum, score)) }
+func Clamp(score int) int        { return min(Maximum, max(Minimum, score)) }
+func Apply(score, delta int) int { return Clamp(score + delta) }
+
+// Replay uses the same per-event bounds as live updates. The caller supplies chronological order.
+func Replay(deltas []int) int {
+	score := Base
+	for _, delta := range deltas {
+		score = Apply(score, delta)
+	}
+	return score
+}
+
 func Description(kind string) string {
 	return map[string]string{"SETTLE": "完成结算", "GRAB_TIMEOUT_REVERT": "抢中后超时未确认", "DISPUTE_LOSE": "争议败诉"}[kind]
 }

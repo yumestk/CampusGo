@@ -95,8 +95,8 @@ func (g *TaskStore) ApplyConfirm(ctx context.Context, u auth.User, id int64, rou
 	if err = tx.Commit(); err != nil {
 		return Card{}, &fault.Error{Code: "CONFIRM_RESULT_UNKNOWN", Status: 503, Cause: err}
 	}
+	_ = g.invalidateDetail(ctx, id, c.Version)
 	_ = g.syncProjection(ctx, id)
-	_ = g.invalidateDetail(ctx, id)
 	decorate(&c, u)
 	return c, nil
 }
@@ -220,8 +220,8 @@ func (g *TaskStore) timeoutStep(ctx context.Context, c Card, next *Candidate, ho
 	if hook != nil {
 		hook("committed")
 	}
+	_ = g.invalidateDetail(ctx, c.ID, c.Version+1)
 	_ = g.syncProjection(ctx, c.ID)
-	_ = g.invalidateDetail(ctx, c.ID)
 	return outcome, nil
 }
 

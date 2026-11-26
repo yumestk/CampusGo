@@ -95,7 +95,11 @@ func (g *TaskStore) ApplyRepair(ctx context.Context, r RepairTask) error {
 	case "PROJECTION":
 		return g.syncProjection(ctx, r.ErrandID)
 	case "CACHE_INVALIDATE":
-		return g.invalidateDetail(ctx, r.ErrandID)
+		var version int64
+		if err := g.DB.QueryRowContext(ctx, "SELECT version FROM errand WHERE id=?", r.ErrandID).Scan(&version); err != nil {
+			return err
+		}
+		return g.invalidateDetail(ctx, r.ErrandID, version)
 	case "REVOKE":
 		if r.RequestID == nil {
 			return fmt.Errorf("revoke has no request")

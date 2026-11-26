@@ -29,6 +29,7 @@ START TRANSACTION;
 DELETE r FROM publish_request r JOIN d2_owned_request o USING(publisher_id,request_key);
 DELETE e FROM escrow_order e JOIN d2_owned_errand o ON o.id=e.errand_id;
 DELETE l FROM errand_status_log l JOIN d2_owned_errand o ON o.id=l.errand_id;
+DELETE r FROM grab_repair_task r JOIN d2_owned_errand o ON o.id=r.errand_id;
 DELETE e FROM errand e JOIN d2_owned_errand o ON o.id=e.id;
 DELETE l FROM wallet_ledger l JOIN d2_owned_errand o ON o.id=l.ref_id WHERE l.ref_type='ESCROW';
 UPDATE wallet_account a LEFT JOIN (SELECT account_id,SUM(CASE WHEN direction='CREDIT' THEN CAST(amount AS DECIMAL(65,0)) ELSE -CAST(amount AS DECIMAL(65,0)) END) balance,MAX(account_version) version FROM wallet_ledger GROUP BY account_id) l ON l.account_id=a.id SET a.available=COALESCE(l.balance,0),a.version=COALESCE(l.version,0) WHERE a.id IN (1,1001,2001,2002);

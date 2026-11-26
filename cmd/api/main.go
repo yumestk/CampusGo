@@ -76,6 +76,12 @@ func run(logger *slog.Logger) error {
 	registry := telemetry.NewRegistry("api")
 	router := httpapi.NewRouter(logger, registry)
 	details := mysqlstore.NewDetailCache(cache, dbName, registry)
+	if raw := os.Getenv("CAMPUSGO_DETAIL_CACHE_LEGACY_READ"); raw != "" {
+		details.LegacyRead, err = strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("invalid CAMPUSGO_DETAIL_CACHE_LEGACY_READ: %w", err)
+		}
+	}
 	refreshCtx, stopRefresh := context.WithCancel(ctx)
 	refreshDone := make(chan struct{})
 	go func() { defer close(refreshDone); details.RunRefresh(refreshCtx, db) }()
@@ -90,7 +96,7 @@ func run(logger *slog.Logger) error {
 	mq := &fundmq.Client{Namespace: dbName}
 	fundStore := &mysqlstore.FundStore{
 		DB: db, IDs: ids,
-		Invalidate: func(c context.Context, id int64) { _ = details.Invalidate(c, id) },
+		Invalidate: details.Invalidate,
 	}
 	funds := &application.Funds{Store: fundStore, Send: mq.Send, Record: mysqlstore.NewFundRecorder(registry)}
 	pushCtx, stopPush := context.WithCancel(ctx)
@@ -119,6 +125,10 @@ func run(logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	httpapi.RegisterBusiness(router, identity, mysqlstore.Query{DB: db, Cache: details}, httpapi.BusinessServices{Notifications: &application.Notifications{Store: notify.ReadStore{DB: db}}, Publisher: &application.Publisher{Store: &mysqlstore.PublishStore{DB: db, IDs: ids}}, Grab: grab, Lifecycle: &application.Lifecycle{Store: g}, Funds: funds, Credit: &mysqlstore.CreditQuery{DB: g.DB, Redis: g.Redis, Namespace: g.Namespace}})
+	publishStore := &mysqlstore.PublishStore{
+		DB: db, IDs: ids,
+		PublishDetail: details.PublishDetail,
+	}
+	httpapi.RegisterBusiness(router, identity, mysqlstore.Query{DB: db, Cache: details}, httpapi.BusinessServices{Notifications: &application.Notifications{Store: notify.ReadStore{DB: db}}, Publisher: &application.Publisher{Store: publishStore}, Grab: grab, Lifecycle: &application.Lifecycle{Store: g}, Funds: funds, Credit: &mysqlstore.CreditQuery{DB: g.DB, Redis: g.Redis, Namespace: g.Namespace}})
 	return server.Run(ctx, cfg, router, logger)
 }

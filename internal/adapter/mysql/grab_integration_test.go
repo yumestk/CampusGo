@@ -726,17 +726,12 @@ func TestIntegrationGrab(t *testing.T) {
 		missing := newID()
 		_, e := q.Detail(ctx, runner, missing)
 		requireCode(t, e, "ERRAND_NOT_FOUND")
-		values, e := cache.MGet(ctx, shardKeys(missing)...).Result()
-		if e != nil {
-			t.Fatal(e)
+		raw, e := cache.Get(ctx, detailPrefix(namespace, missing)+"empty").Bytes()
+		var negative cachedDetail
+		if e != nil || json.Unmarshal(raw, &negative) != nil || !negative.Empty || negative.Exp <= time.Now().UnixMilli() {
+			t.Fatal("first missing lookup did not populate a fresh negative entry", e)
 		}
-		for _, value := range values {
-			raw, ok := value.(string)
-			var stored cachedDetail
-			if !ok || json.Unmarshal([]byte(raw), &stored) != nil || !stored.Empty || stored.Exp <= time.Now().UnixMilli() {
-				t.Fatal("first missing lookup did not populate a fresh negative shard", value)
-			}
-		}
+		requireNoCache(missing)
 		_, e = q.Detail(ctx, runner, missing)
 		requireCode(t, e, "ERRAND_NOT_FOUND")
 
@@ -794,7 +789,7 @@ func TestIntegrationGrab(t *testing.T) {
 				t.Fatal(e)
 			}
 		}
-		lock := fmt.Sprintf("campusgo:%s:detail:rebuild:%d", namespace, id)
+		lock := detailPrefix(namespace, id) + "rebuild"
 		if e = cache.Set(ctx, lock, "another-owner", time.Minute).Err(); e != nil {
 			t.Fatal(e)
 		}
@@ -825,7 +820,7 @@ func TestIntegrationGrab(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 		execSQL("UPDATE errand SET status='DRAFT',version=version+1 WHERE id=?", id)
-		if e = g.reconcileDetail(ctx, Card{ID: id, Status: "DRAFT"}); e != nil {
+		if e = g.reconcileDetail(ctx, Card{ID: id, Status: "DRAFT", Version: c.Version + 2}); e != nil {
 			t.Fatal(e)
 		}
 		requireNoCache(id)
@@ -847,6 +842,82 @@ func TestIntegrationGrab(t *testing.T) {
 		c, e = q.Detail(ctx, runner, id)
 		if e != nil || c.Status != "LOCKED" || len(c.AvailableActions) != 1 || c.AvailableActions[0] != "CONFIRM" || c.ConfirmDeadline == nil {
 			t.Fatal("cache authorized stale grab", c, e)
+		}
+	})
+	t.Run("detail_legacy_and_tagged_keys_are_invalidated_together", func(t *testing.T) {
+		id := newTask()
+		details := &DetailCache{Redis: cache, Namespace: namespace, LegacyRead: true}
+		card, err := scan(db.QueryRowContext(ctx, "SELECT "+columns+" FROM errand WHERE id=?", id))
+		if err != nil || !details.put(ctx, id, card, false) {
+			t.Fatalf("seed both formats: %v", err)
+		}
+		if card, err := (Query{Cache: details}).Detail(ctx, runner, id); err != nil || card.ID != id {
+			t.Fatalf("legacy cache hit: %+v, %v", card, err)
+		}
+		keys := append([]string{}, detailKeys(namespace, id)[1:]...)
+		for shard := range 4 {
+			keys = append(keys, legacyDetailKey(namespace, id, shard))
+		}
+		execSQL("UPDATE errand SET version=version+1 WHERE id=?", id)
+		if err := g.ApplyRepair(ctx, RepairTask{Kind: "CACHE_INVALIDATE", ErrandID: id}); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := cache.Exists(ctx, keys...).Result(); err != nil || n != 0 {
+			t.Fatalf("cached bodies left after repair: %d, %v", n, err)
+		}
+	})
+	t.Run("detail_watermark_rejects_delayed_and_negative_backfill", func(t *testing.T) {
+		id := newTask()
+		const v1 int64 = 9007199254740995
+		const v2 int64 = v1 + 1 // Both round to the same float64.
+		execSQL("UPDATE errand SET version=? WHERE id=?", v1, id)
+		details := NewDetailCache(cache, namespace, prometheus.NewRegistry())
+		query := Query{DB: db, Cache: details}
+		keys := detailKeys(namespace, id)
+
+		if !details.put(ctx, id, Card{}, true) {
+			t.Fatal("could not seed the prior negative cache entry")
+		}
+		if err := details.Invalidate(ctx, id, v1); err != nil {
+			t.Fatal(err)
+		}
+		old, err := query.Detail(ctx, runner, id)
+		if err != nil || old.Version != v1 {
+			t.Fatalf("could not read v1 after invalidating the negative entry: %+v, %v", old, err)
+		}
+
+		execSQL("UPDATE errand SET version=?,reward_amount=101 WHERE id=?", v2, id)
+		if err := g.ApplyRepair(ctx, RepairTask{Kind: "CACHE_INVALIDATE", ErrandID: id}); err != nil {
+			t.Fatal(err)
+		}
+		if details.put(ctx, id, old, false) || details.put(ctx, id, Card{}, true) {
+			t.Fatal("an old positive or negative backfill crossed the watermark")
+		}
+		if value, err := cache.Get(ctx, keys[0]).Result(); err != nil || value != strconv.FormatInt(v2, 10) {
+			t.Fatalf("unexpected watermark %q: %v", value, err)
+		}
+		if ttl, err := cache.PTTL(ctx, keys[0]).Result(); err != nil || ttl < 29*time.Minute || ttl > detailWatermarkTTL {
+			t.Fatalf("unexpected watermark TTL %s: %v", ttl, err)
+		}
+		current, err := query.Detail(ctx, runner, id)
+		if err != nil || current.Version != v2 || current.RewardCents == old.RewardCents {
+			t.Fatalf("detail after rejecting delayed v1: %+v, %v", current, err)
+		}
+
+		// Simulate an independently evicted watermark while the shards still hold v2.
+		if err := cache.Del(ctx, keys[0]).Err(); err != nil {
+			t.Fatal(err)
+		}
+		if details.put(ctx, id, old, false) || details.put(ctx, id, Card{}, true) {
+			t.Fatal("an old positive or negative backfill replaced a newer shard")
+		}
+		if err := details.Invalidate(ctx, id, v1); err != nil {
+			t.Fatal(err)
+		}
+		query.DB = nil // A hit must never reach SQL.
+		hit, err := query.Detail(ctx, runner, id)
+		if err != nil || hit.Version != v2 || hit.RewardCents != current.RewardCents {
+			t.Fatalf("older invalidation changed the cached detail: %+v, %v", hit, err)
 		}
 	})
 	t.Run("concurrent_workers_claim_disjoint_and_inflight_query_is_provisional", func(t *testing.T) {

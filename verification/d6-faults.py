@@ -35,6 +35,19 @@ def rate():
    status,h,v=request(path,headers={'X-Forwarded-For':str(uuid.uuid4())});assert status==expected,(path,status,v)
    if expected==429:assert v['code']=='RATE_LIMITED' and int(h['Retry-After'])>=1
 check('Redis route, IP, and auth token buckets',rate)
+def ip_route_isolation():
+ start=time.monotonic()
+ grab='/api/errands/1/grab'
+ result='/api/errands/1/grab-requests/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+ for expected in [200,200,429]:
+  status,h,v=request(grab,'POST',{})
+  assert status==expected,(grab,status,v)
+  if expected==429:assert v['code']=='RATE_LIMITED' and int(h['Retry-After'])>=1
+ for path in [result,'/api/d6-isolation/wallet']:
+  status,_,v=request(path)
+  assert status==200,(path,status,v)
+ print(f'IP route isolation elapsed={time.monotonic()-start:.3f}s',flush=True)
+check('same-IP grab exhaustion leaves result and api IP buckets available',ip_route_isolation)
 def concurrency():
  with concurrent.futures.ThreadPoolExecutor() as pool:
   first=pool.submit(request,'/__d6/slow');time.sleep(.2);status,h,v=request('/__d6/slow');assert status==503 and v['code']=='GATEWAY_BUSY' and h.get('Retry-After')=='1',(status,v);assert first.result()[0]==200

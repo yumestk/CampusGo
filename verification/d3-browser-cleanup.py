@@ -13,7 +13,7 @@ subprocess.run(mysql,input=pathlib.Path('verification/fixtures/d3-cleanup.sql').
 redis=base+['redis','sh','-c','export REDISCLI_AUTH="$CAMPUSGO_REDIS_PASSWORD"; exec redis-cli --raw "$@"','d3-browser-cleanup']
 for number in range(1,9):
     task=f'900719925474130{number}'
-    for pattern in [f'campusgo:campusgo_verification:grab:v2:{{{task}}}:*',f'campusgo:campusgo_verification:detail:{task}:*',f'campusgo:campusgo_verification:detail:rebuild:{task}']:
+    for pattern in [f'campusgo:campusgo_verification:grab:v2:{{{task}}}:*',f'campusgo:campusgo_verification:detail:{{{task}}}:*']:
         keys=subprocess.check_output(redis+['--scan','--pattern',pattern],text=True).splitlines()
         if any(not re.fullmatch(r'[A-Za-z0-9:{}_-]+',key) for key in keys):
             raise SystemExit('Unexpected fixture key')

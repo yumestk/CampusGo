@@ -20,6 +20,7 @@ import (
 	"github.com/yumestk/CampusGo/internal/platform/database"
 	"github.com/yumestk/CampusGo/internal/platform/fault"
 	"github.com/yumestk/CampusGo/internal/platform/idgen"
+	"github.com/yumestk/CampusGo/internal/platform/rediscache"
 	"github.com/yumestk/CampusGo/internal/wallet"
 )
 
@@ -57,7 +58,7 @@ func TestIntegrationPublishFunds(t *testing.T) {
 		}
 		defer tx.Rollback()
 		for _, id := range users {
-			for _, query := range []string{"DELETE FROM publish_request WHERE publisher_id=?", "DELETE FROM escrow_order WHERE publisher_id=?", "DELETE FROM errand_status_log WHERE operator_id=?", "DELETE FROM errand WHERE publisher_id=?", "DELETE FROM wallet_ledger WHERE user_id=?", "DELETE FROM wallet_account WHERE owner_id=? AND owner_type='USER'", "DELETE FROM app_user WHERE id=?"} {
+			for _, query := range []string{"DELETE FROM publish_request WHERE publisher_id=?", "DELETE FROM escrow_order WHERE publisher_id=?", "DELETE FROM errand_status_log WHERE operator_id=?", "DELETE FROM grab_repair_task WHERE errand_id IN (SELECT id FROM errand WHERE publisher_id=?)", "DELETE FROM errand WHERE publisher_id=?", "DELETE FROM wallet_ledger WHERE user_id=?", "DELETE FROM wallet_account WHERE owner_id=? AND owner_type='USER'", "DELETE FROM app_user WHERE id=?"} {
 				if _, e = tx.Exec(query, id); e != nil {
 					t.Error(e)
 					return
@@ -473,24 +474,52 @@ func TestIntegrationPublishFunds(t *testing.T) {
 	t.Run("real_driver_commit_OK_packet_lost", func(t *testing.T) {
 		u := newUser(1000)
 		key := uuid.NewString()
+		cache, err := rediscache.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cache.Close()
+		details := &DetailCache{Redis: cache, Namespace: "d2-publish-" + uuid.NewString()}
+		var id int64
 		addr, dropped := commitAckProxy(t)
 		proxyDB := databaseViaProxy(t, addr)
-		proxied := &PublishStore{DB: proxyDB, IDs: ids}
+		proxied := &PublishStore{DB: proxyDB, IDs: ids, PublishDetail: details.PublishDetail, beforeCommit: func(tx *sql.Tx) error {
+			if err := tx.QueryRowContext(ctx, "SELECT errand_id FROM publish_request WHERE publisher_id=? AND request_key=?", u.ID, key).Scan(&id); err != nil {
+				return err
+			}
+			_, err := (Query{DB: db, Cache: details}).Detail(ctx, u, id)
+			requireCode(t, err, "ERRAND_NOT_FOUND")
+			return nil
+		}}
 		_, e := proxied.Publish(ctx, u, key, command(125))
 		requireCode(t, e, "PUBLISH_RESULT_UNKNOWN")
+		if id > 0 {
+			defer cache.Del(ctx, detailKeys(details.Namespace, id)...)
+		}
+		t.Logf("E02 lost real COMMIT OK: user=%d request=%s caller=PUBLISH_RESULT_UNKNOWN", u.ID, key)
 		select {
 		case <-dropped:
 		case <-time.After(time.Second):
 			t.Fatal("COMMIT response was not intercepted")
 		}
-		r, e := p.Result(ctx, u, key)
+		var pending int
+		if err := db.QueryRow("SELECT COUNT(*) FROM grab_repair_task WHERE errand_id=? AND kind='CACHE_INVALIDATE' AND state='PENDING'", id).Scan(&pending); err != nil || pending != 1 {
+			t.Fatalf("expected a durable invalidation, got %d: %v", pending, err)
+		}
+		recovery := &PublishStore{DB: db, IDs: ids, PublishDetail: details.PublishDetail}
+		r, e := recovery.Result(ctx, u, key)
 		if e != nil || r.State != "SUCCEEDED" {
 			t.Fatalf("r=%+v err=%v", r, e)
 		}
-		replay, e := p.Publish(ctx, u, key, command(125))
+		view, e := (Query{DB: db, Cache: details}).Detail(ctx, u, id)
+		if e != nil || view.Version != publishedVersion {
+			t.Fatalf("published detail after ambiguous acknowledgement: %+v, %v", view, e)
+		}
+		replay, e := recovery.Publish(ctx, u, key, command(125))
 		if e != nil || *replay.ErrandID != *r.ErrandID || balance(u).AvailableCents != 875 {
 			t.Fatalf("replay=%+v err=%v", replay, e)
 		}
+		t.Logf("E02 durable=%s task=%d replayTask=%d available=%d initial=1000 reward=125", r.State, *r.ErrandID, *replay.ErrandID, balance(u).AvailableCents)
 		check()
 	})
 	t.Run("reconciliation_detects_snapshot_and_ledger_chain_corruption", func(t *testing.T) {

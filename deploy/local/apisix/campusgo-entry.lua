@@ -66,14 +66,17 @@ function M.access(conf,ctx)
   end
   return reject(503,'RATE_LIMIT_UNAVAILABLE',1000)
  end
- local ok=client:connect('redis',6379);if not ok then return fail() end
- ok=client:auth(os.getenv('CAMPUSGO_REDIS_PASSWORD'));if not ok then return fail() end
+ local ok=client:connect('redis',6379,{pool='campusgo-entry-redis'});if not ok then return fail() end
+ local reused=client:get_reused_times();if reused==nil then return fail() end
+ if reused==0 then
+  ok=client:auth(os.getenv('CAMPUSGO_REDIS_PASSWORD'));if not ok then return fail() end
+ end
  local prefix='campusgo:gateway:'..conf.namespace
  local wait=client:eval(bucket,1,prefix..':{route:'..ctx.campusgo_route..'}',conf.route_rate,conf.route_burst)
  if not wait then return fail() end
  if wait>0 then client:set_keepalive(10000,20);return reject(429,'RATE_LIMITED',wait) end
  local auth=ctx.campusgo_route=='auth'
- wait=client:eval(bucket,1,prefix..':{ip:'..ctx.campusgo_source..'}:'..(auth and 'auth' or 'api'),auth and conf.auth_rate or conf.ip_rate,auth and conf.auth_burst or conf.ip_burst)
+ wait=client:eval(bucket,1,prefix..':{ip:'..ctx.campusgo_source..'}:'..ctx.campusgo_route,auth and conf.auth_rate or conf.ip_rate,auth and conf.auth_burst or conf.ip_burst)
  if not wait then return fail() end
  client:set_keepalive(10000,20)
  if wait>0 then return reject(429,'RATE_LIMITED',wait) end

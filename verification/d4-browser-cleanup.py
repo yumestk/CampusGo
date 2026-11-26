@@ -13,7 +13,7 @@ subprocess.run(['python3','verification/d4-browser-credit.py','clean'],check=Tru
 redis=base+['redis','sh','-c','export REDISCLI_AUTH="$CAMPUSGO_REDIS_PASSWORD"; exec redis-cli --raw "$@"','d4-browser-cleanup']
 for number in range(1,17):
     task=str(9007199254741400+number)
-    for pattern in [f'campusgo:campusgo_verification:grab:v2:{{{task}}}:*',f'campusgo:campusgo_verification:detail:{task}:*',f'campusgo:campusgo_verification:detail:rebuild:{task}',f'campusgo:campusgo_verification:candidates:{{{task}}}',f'campusgo:campusgo_verification:candidate-meta:{{{task}}}']:
+    for pattern in [f'campusgo:campusgo_verification:grab:v2:{{{task}}}:*',f'campusgo:campusgo_verification:detail:{{{task}}}:*',f'campusgo:campusgo_verification:candidates:{{{task}}}',f'campusgo:campusgo_verification:candidate-meta:{{{task}}}']:
         keys=subprocess.check_output(redis+['--scan','--pattern',pattern],text=True).splitlines()
         if any(not re.fullmatch(r'[A-Za-z0-9:{}_-]+',key) for key in keys):
             raise SystemExit('Unexpected fixture key')

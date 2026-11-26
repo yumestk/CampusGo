@@ -24,6 +24,10 @@ def route(name,path,config,port=18085,conn=1000):
 '''
 for name,conf in [('headers',{}),('route',{'namespace':'d6route','route_rate':0.01,'route_burst':2}),('ip',{'namespace':'d6ip','ip_rate':0.01,'ip_burst':2}),('slow',{}),('cancel',{}),('timeout',{}),('ws',{}),('auth',{'namespace':'d6auth','auth_rate':0.01,'auth_burst':2})]:
  base+=route(name,('/api/auth/d6-test' if name=='auth' else '/__d6/'+name),conf,conn=1 if name=='slow' else 1000)
+isolation = {'namespace':'d6isolation','ip_rate':0.01,'ip_burst':2}
+base += route('isolation-grab','/api/errands/1/grab',isolation)
+base += route('isolation-result','/api/errands/1/grab-requests/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',isolation)
+base += route('isolation-api','/api/d6-isolation/wallet',isolation)
 base+=route('dead','/__d6/dead',{},18086)
 base+=route('jwt','/api/auth/jwt/*',{},18084)
 # JWT business endpoints use a distinct entry hostname in the same gateway.

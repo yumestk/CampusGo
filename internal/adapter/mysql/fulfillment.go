@@ -93,8 +93,8 @@ func (g *TaskStore) ApplyFulfill(ctx context.Context, u auth.User, id int64, rou
 		return Card{}, &fault.Error{Code: "ACTION_RESULT_UNKNOWN", Status: 503, Cause: err}
 	}
 	if g.Redis != nil {
+		_ = g.invalidateDetail(ctx, id, fresh.Version)
 		_ = g.syncProjection(ctx, id)
-		_ = g.invalidateDetail(ctx, id)
 	}
 	decorate(&fresh, u)
 	return fresh, nil

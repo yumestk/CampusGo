@@ -3,6 +3,7 @@ package mysql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	creditdomain "github.com/yumestk/CampusGo/internal/domain/credit"
@@ -24,7 +25,11 @@ func applyCredit(ctx context.Context, tx *sql.Tx, user, id int64, round int, kin
 	if err != nil || n == 0 {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, "INSERT INTO credit_score(user_id,score,version) VALUES (?,?,1) ON DUPLICATE KEY UPDATE score=LEAST(?,GREATEST(?,score+?)),version=version+1", user, creditdomain.Clamp(creditdomain.Base+delta), creditdomain.Maximum, creditdomain.Minimum, delta)
+	score := creditdomain.Base
+	if err = tx.QueryRowContext(ctx, "SELECT score FROM credit_score WHERE user_id=?", user).Scan(&score); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, "INSERT INTO credit_score(user_id,score,version) VALUES (?,?,1) ON DUPLICATE KEY UPDATE score=VALUES(score),version=version+1", user, creditdomain.Apply(score, delta))
 	return err
 }
 func (g *CreditStore) calibrateUser(ctx context.Context, id int64) error {
@@ -49,7 +54,26 @@ func (g *CreditStore) recalibrate(ctx context.Context, id int64, dueOnly bool) e
 			return nil
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO credit_score(user_id,score,version,last_calibrated_at) SELECT ?,LEAST(?,GREATEST(?,?+COALESCE(SUM(delta),0))),1,CURRENT_TIMESTAMP(3) FROM credit_event WHERE user_id=? AND created_at>=TIMESTAMPADD(DAY,?,CURRENT_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE score=VALUES(score),version=version+1,last_calibrated_at=CURRENT_TIMESTAMP(3)`, id, creditdomain.Maximum, creditdomain.Minimum, creditdomain.Base, id, -creditdomain.WindowDays)
+	rows, err := tx.QueryContext(ctx, `SELECT delta FROM credit_event WHERE user_id=? AND created_at BETWEEN TIMESTAMPADD(DAY,?,CURRENT_TIMESTAMP(3)) AND CURRENT_TIMESTAMP(3) ORDER BY created_at ASC,id ASC`, id, -creditdomain.WindowDays)
+	if err != nil {
+		return err
+	}
+	var deltas []int
+	for rows.Next() {
+		var delta int
+		if err := rows.Scan(&delta); err != nil {
+			rows.Close()
+			return err
+		}
+		deltas = append(deltas, delta)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO credit_score(user_id,score,version,last_calibrated_at) VALUES (?,?,1,CURRENT_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE score=VALUES(score),version=version+1,last_calibrated_at=CURRENT_TIMESTAMP(3)`, id, creditdomain.Replay(deltas))
 	if err != nil {
 		return err
 	}

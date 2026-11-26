@@ -315,7 +315,7 @@ finally:
   redis=compose+['exec','-T','redis','sh','-c','export REDISCLI_AUTH="$CAMPUSGO_REDIS_PASSWORD";exec redis-cli --raw "$@"','e06-cleanup']
   patterns=['campusgo:auth:test:live:'+env['CAMPUSGO_SESSION_NAMESPACE']+':*','campusgo:gateway:'+E+':*']
   patterns += ['campusgo:campusgo_verification:grab:v2:{'+task+'}:*' for task in tasks]
-  patterns += ['campusgo:campusgo_verification:detail:'+task+':*' for task in tasks]
+  patterns += ['campusgo:campusgo_verification:detail:{'+task+'}:*' for task in tasks]
   patterns += ['campusgo:campusgo_verification:rl:{runner:'+str(u)+'}:*' for u in users]
   for pattern in patterns:
    ks=subprocess.check_output(redis+['--scan','--pattern',pattern],text=True).splitlines()

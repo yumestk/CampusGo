@@ -652,6 +652,47 @@ func TestIntegrationD5(t *testing.T) {
 		reconcile()
 	})
 
+	t.Run("credit_calibration_replays_live_clamping_in_event_order", func(t *testing.T) {
+		u := user("STUDENT")
+		id := newTask(1)
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback()
+		if valid, err := lockRunner(ctx, tx, u.ID, u.CampusID); err != nil || !valid {
+			t.Fatalf("lock fixture runner: valid=%v, %v", valid, err)
+		}
+		for round := range 37 {
+			kind, delta := "SETTLE", 2
+			if round >= 24 {
+				kind, delta = "GRAB_TIMEOUT_REVERT", -5
+			}
+			if err := applyCredit(ctx, tx, u.ID, id, round, kind, delta); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		// Force equal timestamps so replay also exercises the event ID tie-break.
+		exec("UPDATE credit_event SET created_at=CURRENT_TIMESTAMP(3) WHERE user_id=? AND errand_id=?", u.ID, id)
+		live := count("SELECT score FROM credit_score WHERE user_id=?", u.ID)
+		if live != 35 {
+			t.Fatalf("live score=%d, want 35 (sum-then-clamp would produce 43)", live)
+		}
+		if err := g.calibrateUser(ctx, u.ID); err != nil {
+			t.Fatal(err)
+		}
+		if calibrated := count("SELECT score FROM credit_score WHERE user_id=?", u.ID); calibrated != live {
+			t.Fatalf("calibrated score=%d, live score=%d", calibrated, live)
+		}
+		if _, err := f.Execute(ctx, publisher, uuid.NewString(), command(id, "CANCEL")); err != nil {
+			t.Fatal(err)
+		}
+		reconcile()
+	})
+
 	t.Run("reconcile_locates_corrupt_terminal_posting", func(t *testing.T) {
 		id := delivered(1001)
 		if _, e := f.Execute(ctx, publisher, uuid.NewString(), command(id, "SETTLE")); e != nil {
